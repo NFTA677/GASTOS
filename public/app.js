@@ -618,26 +618,58 @@ function pintarMes({ actual, proximo, pendientes }) {
   const siguiente = moverMes(estado.mes, 1);
   const mesActual = hoy().slice(0, 7);
   const delDia = estado.dia ? actual.filter((m) => m.fecha === estado.dia) : [];
+  const esMesActual = estado.mes === mesActual;
+  const sinPagar = actual.filter((m) => !m.pagado);
+  // En el mes en curso, «pendientes» incluye lo vencido y los próximos 30 días; en otro mes, lo de ese mes.
+  const pendientesVista = esMesActual ? pendientes : sinPagar;
+  const mesCorto = nombreMes(estado.mes, { month: 'long' });
+  const verDia = (dia) => () => {
+    estado.dia = dia;
+    render(true);
+  };
 
   const secciones = {
     calendario: () =>
       h('div', { class: 'dos-columnas' },
-        h('section', { class: 'panel' }, calendario(actual)),
+        h('section', { class: 'panel' },
+          // El mes también se cambia desde aquí, sin subir al principio de la página.
+          h('div', { class: 'nav-calendario' },
+            h('button', { type: 'button', class: 'cuadrado', onclick: () => irAMes(moverMes(estado.mes, -1)), 'aria-label': 'Mes anterior' }, '‹'),
+            h('strong', { class: 'capital' }, nombreMes(estado.mes)),
+            h('button', { type: 'button', class: 'cuadrado', onclick: () => irAMes(siguiente), 'aria-label': 'Mes siguiente' }, '›'),
+            !esMesActual && h('button', { type: 'button', class: 'mini', onclick: () => irAMes(mesActual) }, 'Hoy'),
+          ),
+          calendario(actual),
+        ),
         h('section', { class: 'panel' },
           estado.dia
             ? [
-                h('header', null, h('h3', null, fechaTexto(estado.dia, { weekday: 'long', day: 'numeric', month: 'long' }))),
+                h('header', null,
+                  h('h3', null, fechaTexto(estado.dia, { weekday: 'long', day: 'numeric', month: 'long' })),
+                  h('span', { class: 'espacio' }),
+                  h('button', { type: 'button', class: 'mini', onclick: verDia(null) }, `Ver todo ${mesCorto}`)),
                 listaMovimientos(delDia, editar, 'No hay movimientos este día.'),
                 editar && h('div', { class: 'pie-panel' },
                   h('button', { type: 'button', class: 'primario ancho', onclick: () => abrirMovimiento(null, estado.dia) }, '+ Añadir en este día')),
               ]
-            : h('p', { class: 'vacio' }, 'Toca un día del calendario para ver sus movimientos.'),
+            : [
+                // Sin día elegido se ve el mes entero: primero lo que falta por pagar o cobrar.
+                h('header', null,
+                  h('h3', null, `Pagos de ${mesCorto}`),
+                  h('span', { class: 'tenue' }, sinPagar.length
+                    ? `${sinPagar.length} ${sinPagar.length === 1 ? 'pendiente' : 'pendientes'} · ${dinero(t.gastosPendientes)} por pagar`
+                    : actual.length ? 'todo al día' : '')),
+                listaMovimientos([...sinPagar, ...actual.filter((m) => m.pagado)], editar, 'No hay movimientos este mes.'),
+                h('p', { class: 'tenue pie-panel' }, 'Toca un día del calendario para ver solo los de esa fecha.'),
+              ],
         ),
       ),
     pendientes: () =>
       h('section', { class: 'panel' },
-        h('header', null, h('h3', null, 'Pagos y cobros pendientes'), h('span', { class: 'tenue' }, 'vencidos y próximos 30 días')),
-        listaMovimientos(pendientes, editar, 'No hay nada pendiente. ¡Todo al día!'),
+        h('header', null,
+          h('h3', null, 'Pagos y cobros pendientes'),
+          h('span', { class: 'tenue' }, esMesActual ? 'vencidos y próximos 30 días' : `de ${nombreMes(estado.mes)}`)),
+        listaMovimientos(pendientesVista, editar, esMesActual ? 'No hay nada pendiente. ¡Todo al día!' : `No hay nada pendiente en ${mesCorto}.`),
       ),
     movimientos: () =>
       h('section', { class: 'panel' },
@@ -673,7 +705,7 @@ function pintarMes({ actual, proximo, pendientes }) {
 
     segmentos('mes', [
       ['calendario', 'Calendario'],
-      ['pendientes', 'Pendientes', pendientes.length, true],
+      ['pendientes', 'Pendientes', pendientesVista.length, true],
       ['movimientos', 'Movimientos', actual.length],
     ]),
     secciones[estado.seccion.mes](),
