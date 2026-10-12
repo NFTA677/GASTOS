@@ -20,8 +20,8 @@
   <main id="auth" class="auth" hidden>
     <div class="auth-caja">
       <h1 class="logo grande" aria-label="N.F.T.A Corp"><b>N.F.T.A</b><i>Corp</i></h1>
-      <p class="tenue">Registro de gastos, ingresos y próximos pagos.</p>
-      <form id="form-auth">
+      <p class="tenue centro">Registro de gastos, ingresos y próximos pagos.</p>
+      <form id="form-auth" class="panel">
         <label id="campo-nombre" hidden>Nombre
           <input name="nombre" autocomplete="name" maxlength="60">
         </label>
@@ -32,7 +32,7 @@
           <input name="password" type="password" minlength="8" maxlength="72" required>
         </label>
         <p class="error" id="auth-error" role="alert"></p>
-        <button class="primario" id="auth-enviar">Entrar</button>
+        <button class="primario ancho" id="auth-enviar">Entrar</button>
       </form>
       <p class="tenue centro">
         <span id="auth-pregunta">¿No tienes cuenta?</span>
@@ -44,31 +44,45 @@
   <!-- Aplicación -->
   <div id="app" hidden>
     <header class="barra">
+      <button id="abrir-menu" type="button" class="cuadrado" aria-label="Abrir menú" aria-haspopup="dialog">
+        <span class="hamburguesa" aria-hidden="true"></span>
+      </button>
       <span class="logo" aria-label="N.F.T.A Corp"><b>N.F.T.A</b><i>Corp</i></span>
-      <label class="selector-libro">
-        <span class="solo-lectores">Libro</span>
-        <select id="libro"></select>
-      </label>
-      <label class="selector-moneda" title="Moneda de este libro">
-        <span class="solo-lectores">Moneda</span>
-        <select id="moneda"></select>
-      </label>
-      <button id="nuevo-libro" type="button" title="Crear un libro nuevo">+ Libro</button>
-      <span class="espacio"></span>
-      <button id="instalar" type="button" hidden>Instalar app</button>
-      <span id="usuario" class="tenue"></span>
-      <button id="salir" type="button">Salir</button>
+      <span id="titulo-libro" class="titulo-libro"></span>
+      <button id="nuevo-rapido" type="button" class="primario" hidden>+ Nuevo</button>
     </header>
 
-    <nav class="pestanas" id="pestanas">
+    <main id="contenido" class="contenido"></main>
+  </div>
+
+  <!-- Menú lateral -->
+  <dialog id="menu" class="cajon" aria-label="Menú">
+    <div class="cajon-cabecera">
+      <span class="logo"><b>N.F.T.A</b><i>Corp</i></span>
+      <button type="button" class="cuadrado" data-cerrar aria-label="Cerrar menú">✕</button>
+    </div>
+    <p id="usuario" class="cajon-usuario"></p>
+
+    <nav class="cajon-nav" id="pestanas" aria-label="Secciones">
       <button type="button" data-vista="mes">Mes</button>
       <button type="button" data-vista="anio">Año</button>
       <button type="button" data-vista="compartir">Compartir</button>
       <button type="button" data-vista="admin" id="pestana-admin" hidden>Admin</button>
     </nav>
 
-    <main id="contenido" class="contenido"></main>
-  </div>
+    <label>Libro
+      <select id="libro"></select>
+    </label>
+    <label>Moneda del libro
+      <select id="moneda"></select>
+    </label>
+    <button id="nuevo-libro" type="button" class="ancho">+ Nuevo libro</button>
+
+    <div class="cajon-pie">
+      <button id="instalar" type="button" class="ancho" hidden>Instalar app</button>
+      <button id="salir" type="button" class="ancho">Cerrar sesión</button>
+    </div>
+  </dialog>
 
   <!-- Formulario de movimiento -->
   <dialog id="dlg-mov">
@@ -105,6 +119,7 @@
       </label>
       <p class="error" id="mov-error" role="alert"></p>
       <div class="acciones">
+        <button type="button" id="mov-eliminar" class="peligro al-inicio" hidden>Eliminar</button>
         <button type="button" data-cerrar>Cancelar</button>
         <button class="primario" value="guardar">Guardar</button>
       </div>

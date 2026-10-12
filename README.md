@@ -24,7 +24,10 @@ La conexión se configura en el archivo `.env` (copia `.env.example` como `.env`
 - **Libros:** cada cuenta empieza con un libro «Personal». Puedes crear más («Casa», «Viaje»…), cada uno con su moneda.
 - **Moneda:** el selector de la cabecera cambia la moneda del libro (soles por defecto, dólares o cualquier otra). Solo cambia el símbolo; no convierte los montos.
 - **Admin:** la primera cuenta registrada (o las de `ADMIN_EMAILS`) ve una pestaña «Admin» con el espacio usado y libre en MongoDB y la lista de usuarios. Desde ahí puede crear cuentas y eliminarlas (al eliminar una cuenta se borran también sus libros y movimientos).
-- **Mes:** ingresos, gastos, balance y lo que falta por pagar; lista de pagos y cobros pendientes (vencidos y de los próximos 30 días) y previsión del mes siguiente.
+- **Menú:** el botón de las tres rayas abre el menú con las secciones (Mes, Año, Compartir, Admin), el libro, la moneda y la sesión.
+- **Mes:** ingresos, gastos, balance y lo que falta por pagar, la previsión del mes siguiente y tres secciones: Calendario, Pendientes (vencidos y próximos 30 días) y Movimientos.
+- **Calendario:** un punto rojo marca los días con pagos sin hacer y uno gris los días con movimientos ya pagados o ingresos. Al tocar un día se ven sus movimientos y se puede añadir uno en esa fecha.
+- **Movimientos:** tocar un movimiento lo abre para editarlo o eliminarlo; el botón de al lado lo marca como pagado o cobrado.
 - **Repetir cada mes:** al crear un gasto o ingreso fijo (alquiler, salario…) elige durante cuántos meses se repite; así aparece en los meses futuros y en el total del año.
 - **Año:** totales anuales, gráfica mes a mes y reparto por categorías.
 - **Compartir:** el propietario de un libro invita a otra persona por su correo (debe estar registrada) con acceso de «solo ver» o «puede editar».
