@@ -2,6 +2,7 @@ import makeWASocket, {
   Browsers,
   BufferJSON,
   DisconnectReason,
+  fetchLatestWaWebVersion,
   initAuthCreds,
   isJidBroadcast,
   isJidGroup,
@@ -75,7 +76,28 @@ async function sesionEnMongo() {
   };
 }
 
-const borrarSesion = () => SesionWa.deleteMany({});
+// La sesión se mantiene en memoria entre reconexiones: justo después de escanear el QR, WhatsApp
+// obliga a reabrir la conexión, y releerla de la base podría devolver una copia aún sin guardar.
+let sesion = null;
+
+async function borrarSesion() {
+  sesion = null;
+  await SesionWa.deleteMany({});
+}
+
+// WhatsApp rechaza la vinculación de clientes que se presentan con una versión antigua de WhatsApp Web,
+// así que se consulta la vigente (y se recuerda unas horas). Si falla, se usa la que trae la librería.
+let versionWeb = { hasta: 0, version: undefined };
+async function versionActual() {
+  if (Date.now() < versionWeb.hasta) return versionWeb.version;
+  try {
+    const { version } = await fetchLatestWaWebVersion();
+    if (Array.isArray(version)) versionWeb = { hasta: Date.now() + 6 * 60 * 60 * 1000, version };
+  } catch {
+    // Sin acceso a la versión vigente: se sigue con la última conocida.
+  }
+  return versionWeb.version;
+}
 
 // ---------- conexión ----------
 
@@ -94,10 +116,15 @@ export async function conectarWhatsapp() {
   if (socket) return;
   wa.estado = 'conectando';
   wa.aviso = '';
-  const { state, guardarCredenciales } = await sesionEnMongo();
+  sesion ??= await sesionEnMongo();
+  const { state, guardarCredenciales } = sesion;
+  const version = await versionActual();
+  // Otra llamada pudo crear la conexión mientras se esperaba.
+  if (socket) return;
 
   socket = makeWASocket({
     auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, silencio) },
+    ...(version && { version }),
     logger: silencio,
     browser: Browsers.ubuntu('Chrome'),
     // El teléfono sigue recibiendo notificaciones y no se descarga el historial de chats.
@@ -124,7 +151,8 @@ export async function conectarWhatsapp() {
     }
     if (connection === 'close') {
       const codigo = lastDisconnect?.error?.output?.statusCode;
-      const teniaSesion = Boolean(state.creds.registered || state.creds.me);
+      const vinculada = Boolean(state.creds.me);
+      console.log(`WhatsApp: conexión cerrada (código ${codigo ?? 'desconocido'}, ${vinculada ? 'con' : 'sin'} sesión vinculada)`);
       cerrarSocket();
       wa.qr = null;
       wa.numero = null;
@@ -132,16 +160,23 @@ export async function conectarWhatsapp() {
       if (codigo === DisconnectReason.loggedOut) {
         await borrarSesion();
         wa.estado = 'desconectado';
-        wa.aviso = 'La sesión se cerró desde el teléfono. Vuelve a conectar y escanea el código.';
-      } else if (codigo === DisconnectReason.connectionReplaced) {
+        wa.aviso = 'WhatsApp cerró la sesión (desde el teléfono o por rechazar la vinculación). Vuelve a conectar y escanea el código.';
+        return;
+      }
+      // Antes de reabrir se asegura que la sesión recién creada queda guardada.
+      if (vinculada) await guardarCredenciales().catch((err) => console.error('WhatsApp: no se pudo guardar la sesión:', err.message));
+
+      if (codigo === DisconnectReason.connectionReplaced) {
         // Otra copia del servidor abrió la misma sesión (pasa durante un despliegue): no se compite con ella.
         wa.estado = 'desconectado';
         wa.aviso = 'La sesión se abrió desde otra instancia del servidor. Pulsa «Conectar» si el bot no responde.';
-      } else if (codigo === DisconnectReason.restartRequired || teniaSesion) {
-        // Tras escanear el QR WhatsApp pide reiniciar la conexión; con sesión guardada se reintenta siempre.
+      } else if (codigo === DisconnectReason.restartRequired || vinculada) {
+        // Tras escanear el QR WhatsApp pide reiniciar la conexión; con sesión vinculada se reintenta siempre.
         wa.estado = 'conectando';
-        reintento = setTimeout(() => conectarWhatsapp().catch((err) => console.error('WhatsApp:', err.message)), codigo === DisconnectReason.restartRequired ? 500 : 5000);
+        reintento = setTimeout(() => conectarWhatsapp().catch((err) => console.error('WhatsApp:', err.message)), codigo === DisconnectReason.restartRequired ? 1000 : 5000);
       } else {
+        // QR sin escanear: se descarta la sesión a medias para empezar limpio la próxima vez.
+        await borrarSesion();
         wa.estado = 'desconectado';
         wa.aviso = 'El código QR caducó sin escanearse. Pulsa «Conectar» para generar otro.';
       }
@@ -168,7 +203,11 @@ export async function desconectarWhatsapp() {
 
 // Al arrancar el servidor: si ya se escaneó el QR en otra ocasión, se reconecta solo.
 export async function reanudarWhatsapp() {
-  if (await SesionWa.exists({ _id: 'creds' })) await conectarWhatsapp();
+  const guardada = await SesionWa.findById('creds').lean();
+  if (!guardada) return;
+  // Solo cuenta una sesión que llegó a vincularse; una a medias (QR sin escanear) se descarta.
+  if (JSON.parse(guardada.datos, BufferJSON.reviver)?.me) await conectarWhatsapp();
+  else await borrarSesion();
 }
 
 export function pararWhatsapp() {
