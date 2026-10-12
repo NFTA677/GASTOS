@@ -105,6 +105,13 @@ label.check { display: flex; align-items: center; gap: .6rem; font-size: .95rem;
 }
 .selector-libro { margin: 0 0 0 .5rem; min-width: 0; }
 .selector-libro select { width: auto; max-width: 100%; min-height: 38px; margin: 0; border-radius: 999px; padding: .3rem .8rem; }
+.selector-moneda { margin: 0; }
+.selector-moneda select { width: 5.2rem; min-height: 38px; margin: 0; border-radius: 999px; padding: .3rem .7rem; }
+.selector-moneda select:disabled { opacity: .55; }
+.periodo h2.izquierda { text-align: left; }
+.medidor { height: 14px; border: 1px solid var(--borde-fuerte); border-radius: 999px; overflow: hidden; }
+.medidor div { height: 100%; background: var(--texto); border-radius: 999px; }
+.nota-medidor { margin: .6rem 0; font-size: .85rem; }
 #usuario { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 12rem; }
 
 .pestanas { display: flex; gap: .25rem; padding: 0 16px; border-bottom: 1px solid var(--borde); }
@@ -238,9 +245,11 @@ dialog h2 { margin-bottom: 1rem; }
   /* Cabecera en dos filas: marca y sesión arriba, libro debajo a todo el ancho. */
   .barra { position: static; flex-wrap: wrap; gap: .5rem; padding-left: 12px; padding-right: 12px; }
   table:not(.tabla-mov) { font-size: .82rem; }
-  .selector-libro { order: 5; flex: 1 1 calc(100% - 110px); margin-left: 0; }
+  .selector-libro { order: 5; flex: 1 1 calc(100% - 215px); margin-left: 0; }
   .selector-libro select { width: 100%; }
-  #nuevo-libro { order: 6; }
+  .selector-moneda { order: 6; }
+  #nuevo-libro { order: 7; }
+  .pestanas button { padding-left: .3rem; padding-right: .3rem; font-size: .72rem; }
 
   /* Las pestañas pasan a una barra fija inferior, al alcance del pulgar. */
   .pestanas {

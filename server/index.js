@@ -5,7 +5,8 @@ import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { config } from './config.js';
 import { conectar, desconectar, estadoBd } from './db.js';
-import { rutasAuth, requiereSesion } from './auth.js';
+import { rutasAuth, requiereSesion, requiereAdmin } from './auth.js';
+import { rutasAdmin } from './admin.js';
 import { rutasApi } from './routes.js';
 import { manejarErrores } from './errores.js';
 
@@ -26,6 +27,7 @@ app.use('/api', (req, res, next) => {
   res.status(503).json({ error: `Sin conexión con la base de datos. ${estadoBd.causa}` });
 });
 app.use('/api/auth', rutasAuth);
+app.use('/api/admin', requiereSesion, requiereAdmin, rutasAdmin);
 app.use('/api', requiereSesion, rutasApi);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
 app.use(express.static(publico));

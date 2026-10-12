@@ -33,5 +33,9 @@ export const config = {
   puerto: Number(process.env.PORT) || 3000,
   mongoUri: uriDeMongo(),
   jwtSecret: process.env.JWT_SECRET,
+  // Correos con acceso al panel de administrador. Si está vacío, lo es la primera cuenta registrada.
+  adminEmails: (process.env.ADMIN_EMAILS || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
+  // Espacio contratado en MongoDB; 512 MB es el plan gratuito de Atlas.
+  almacenamientoMb: Number(process.env.ALMACENAMIENTO_MB) || 512,
   produccion: process.env.NODE_ENV === 'production',
 };

@@ -19,7 +19,19 @@ function iniciarSesion(res, usuario) {
   });
 }
 
-const publico = (u) => ({ id: u.id, nombre: u.nombre, email: u.email });
+async function esAdmin(usuario) {
+  if (config.adminEmails.length) return config.adminEmails.includes(usuario.email);
+  const primero = await Usuario.findOne().sort({ createdAt: 1 }).select('_id');
+  return Boolean(primero?._id.equals(usuario._id));
+}
+
+const publico = async (u) => ({ id: u.id, nombre: u.nombre, email: u.email, esAdmin: await esAdmin(u) });
+
+export async function requiereAdmin(req, res, next) {
+  const usuario = await Usuario.findById(req.usuario.id);
+  if (!usuario || !(await esAdmin(usuario))) throw new ErrorHttp(403, 'Solo el administrador puede ver esto');
+  next();
+}
 
 export function requiereSesion(req, res, next) {
   try {
@@ -55,7 +67,7 @@ rutasAuth.post('/registro', limite, async (req, res) => {
   await Libro.create({ nombre: 'Personal', propietario: usuario._id });
 
   iniciarSesion(res, usuario);
-  res.status(201).json({ usuario: publico(usuario) });
+  res.status(201).json({ usuario: await publico(usuario) });
 });
 
 rutasAuth.post('/login', limite, async (req, res) => {
@@ -66,7 +78,7 @@ rutasAuth.post('/login', limite, async (req, res) => {
     throw new ErrorHttp(401, 'Correo o contraseña incorrectos');
   }
   iniciarSesion(res, usuario);
-  res.json({ usuario: publico(usuario) });
+  res.json({ usuario: await publico(usuario) });
 });
 
 rutasAuth.post('/logout', (req, res) => {
@@ -80,5 +92,5 @@ rutasAuth.get('/yo', requiereSesion, async (req, res) => {
     res.clearCookie(COOKIE);
     throw new ErrorHttp(401, 'Inicia sesión para continuar');
   }
-  res.json({ usuario: publico(usuario) });
+  res.json({ usuario: await publico(usuario) });
 });

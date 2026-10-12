@@ -1,4 +1,12 @@
-const MONEDAS = ['USD', 'EUR', 'MXN', 'COP', 'ARS', 'CLP', 'PEN', 'BOB', 'UYU', 'PYG', 'VES', 'DOP', 'CRC', 'GTQ', 'HNL', 'NIO', 'BRL'];
+// Soles y dólares primero; después, todas las monedas que conoce el navegador.
+const MONEDAS_FRECUENTES = ['PEN', 'USD', 'EUR'];
+const MONEDAS = [
+  ...MONEDAS_FRECUENTES,
+  ...(Intl.supportedValuesOf?.('currency') ?? ['MXN', 'COP', 'ARS', 'CLP', 'BOB', 'UYU', 'PYG', 'VES', 'DOP', 'CRC', 'GTQ', 'BRL', 'GBP'])
+    .filter((m) => !MONEDAS_FRECUENTES.includes(m)),
+];
+const nombresMoneda = new Intl.DisplayNames('es', { type: 'currency' });
+const opcionesMoneda = () => MONEDAS.map((m) => h('option', { value: m }, `${m} · ${nombresMoneda.of(m)}`));
 const CATEGORIAS = {
   gasto: ['Vivienda', 'Comida', 'Transporte', 'Servicios', 'Salud', 'Educación', 'Ocio', 'Ropa', 'Deudas', 'Suscripciones', 'Mascotas', 'Otros'],
   ingreso: ['Salario', 'Ventas', 'Freelance', 'Intereses', 'Regalos', 'Otros'],
@@ -74,9 +82,10 @@ const libroActual = () => estado.libros.find((l) => l.id === estado.libroId);
 const puedeEditar = () => libroActual()?.rol !== 'lector';
 
 function dinero(monto) {
-  const moneda = libroActual()?.moneda ?? 'USD';
+  const moneda = libroActual()?.moneda ?? 'PEN';
   try {
-    return new Intl.NumberFormat('es', { style: 'currency', currency: moneda }).format(monto);
+    // Formato peruano con símbolo corto: «S/ 2,720.50», «$ 2,720.50», «€ 2,720.50».
+    return new Intl.NumberFormat('es-PE', { style: 'currency', currency: moneda, currencyDisplay: 'narrowSymbol' }).format(monto);
   } catch {
     return `${monto.toFixed(2)} ${moneda}`;
   }
@@ -156,6 +165,8 @@ $('#salir').addEventListener('click', async () => {
 async function entrar(usuario) {
   estado.usuario = usuario;
   $('#usuario').textContent = usuario.nombre;
+  $('#pestana-admin').hidden = !usuario.esAdmin;
+  if (!usuario.esAdmin && estado.vista === 'admin') estado.vista = 'mes';
   $('#auth').hidden = true;
   $('#app').hidden = false;
   await cargarLibros();
@@ -181,12 +192,40 @@ async function cargarLibros() {
         l.rol === 'propietario' ? l.nombre : `${l.nombre} (de ${l.propietario})`),
     ),
   );
+  pintarMoneda();
+}
+
+// El selector de moneda refleja el libro elegido; solo su propietario puede cambiarla.
+function pintarMoneda() {
+  const libro = libroActual();
+  const selector = $('#moneda');
+  // En la cabecera solo cabe el código; el nombre completo sale al pasar el ratón.
+  if (!selector.options.length) {
+    selector.replaceChildren(...MONEDAS.map((m) => h('option', { value: m, title: nombresMoneda.of(m) }, m)));
+  }
+  selector.value = libro?.moneda ?? 'PEN';
+  selector.disabled = libro?.rol !== 'propietario';
 }
 
 $('#libro').addEventListener('change', (ev) => {
   recordarLibro(ev.target.value);
+  pintarMoneda();
   render();
 });
+
+$('#moneda').addEventListener('change', (ev) =>
+  intentar(async () => {
+    const libro = libroActual();
+    try {
+      await api(`/libros/${libro.id}`, { method: 'PATCH', body: { moneda: ev.target.value } });
+      libro.moneda = ev.target.value;
+      avisar(`Moneda del libro: ${nombresMoneda.of(libro.moneda)}`);
+    } finally {
+      pintarMoneda();
+    }
+    render();
+  }),
+);
 
 let libroEnEdicion = null;
 
@@ -196,8 +235,8 @@ function abrirLibro(libro = null) {
   $('#libro-titulo').textContent = libro ? 'Editar libro' : 'Nuevo libro';
   $('#libro-error').textContent = '';
   form.nombre.value = libro?.nombre ?? '';
-  form.moneda.replaceChildren(...MONEDAS.map((m) => h('option', { value: m }, m)));
-  form.moneda.value = libro?.moneda ?? libroActual()?.moneda ?? 'USD';
+  form.moneda.replaceChildren(...opcionesMoneda());
+  form.moneda.value = libro?.moneda ?? libroActual()?.moneda ?? 'PEN';
   $('#dlg-libro').showModal();
 }
 
@@ -680,9 +719,80 @@ async function vistaCompartir() {
   ];
 }
 
+// ---------- vista: administrador ----------
+
+function tamano(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+const entero = (n) => new Intl.NumberFormat('es-PE').format(n);
+
+async function vistaAdmin() {
+  const [a, { usuarios }] = await Promise.all([api('/admin/almacenamiento'), api('/admin/usuarios')]);
+  const porcentaje = a.porcentaje < 0.1 && a.usado > 0 ? '< 0.1' : a.porcentaje.toFixed(1);
+
+  return [
+    h('div', { class: 'periodo' }, h('h2', { class: 'izquierda' }, 'Almacenamiento')),
+
+    h('div', { class: 'tarjetas' },
+      tarjeta('Espacio libre', tamano(a.libre), `de ${tamano(a.limite)} en total`, 'destacada'),
+      tarjeta('Espacio usado', tamano(a.usado), `${porcentaje} % del total`),
+      tarjeta('Movimientos que aún caben', `≈ ${entero(a.movimientosQueCaben)}`, 'Estimación según el tamaño medio'),
+      tarjeta('Movimientos guardados', entero(a.totales.movimientos),
+        `${entero(a.totales.usuarios)} ${a.totales.usuarios === 1 ? 'usuario' : 'usuarios'} · ${entero(a.totales.libros)} ${a.totales.libros === 1 ? 'libro' : 'libros'}`),
+    ),
+
+    h('section', { class: 'panel' },
+      h('header', null, h('h3', null, 'Uso de la base de datos'), h('span', { class: 'tenue' }, `${porcentaje} % usado`)),
+      h('div', { class: 'medidor', role: 'img', 'aria-label': `${porcentaje} % del almacenamiento usado` },
+        h('div', { style: `width:${Math.max(a.porcentaje, a.usado > 0 ? 0.5 : 0)}%` }),
+      ),
+      h('p', { class: 'tenue nota-medidor' },
+        a.clusterCompleto
+          ? 'Incluye todas las bases de datos del clúster, porque el límite del plan es compartido.'
+          : 'Solo se pudo medir la base de datos de esta app; si el clúster tiene otras, también ocupan espacio.'),
+      a.porcentaje >= 80 && h('p', { class: 'error' }, 'Queda poco espacio. Conviene borrar movimientos antiguos o ampliar el plan de MongoDB.'),
+      a.bases.length > 1 && h('div', { class: 'tabla-scroll' },
+        h('table', null,
+          h('thead', null, h('tr', null, h('th', null, 'Base de datos'), h('th', { class: 'monto' }, 'Documentos'), h('th', { class: 'monto' }, 'Tamaño'))),
+          h('tbody', null,
+            a.bases.map((b) =>
+              h('tr', null,
+                h('td', null, b.nombre, b.propia && h('span', { class: 'tenue' }, ' (esta app)')),
+                h('td', { class: 'monto' }, entero(b.documentos)),
+                h('td', { class: 'monto' }, tamano(b.bytes)),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+
+    h('section', { class: 'panel' },
+      h('header', null, h('h3', null, 'Usuarios registrados'), h('span', { class: 'tenue' }, String(usuarios.length))),
+      h('div', { class: 'tabla-scroll' },
+        h('table', null,
+          h('thead', null, h('tr', null, h('th', null, 'Persona'), h('th', null, 'Registro'), h('th', { class: 'monto' }, 'Libros'))),
+          h('tbody', null,
+            usuarios.map((u) =>
+              h('tr', null,
+                h('td', null, u.nombre, u.id === estado.usuario.id && ' (tú)', h('div', { class: 'tenue' }, u.email)),
+                h('td', null, u.registro),
+                h('td', { class: 'monto' }, String(u.libros)),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  ];
+}
+
 // ---------- render ----------
 
-const VISTAS = { mes: vistaMes, anio: vistaAnio, compartir: vistaCompartir };
+const VISTAS = { mes: vistaMes, anio: vistaAnio, compartir: vistaCompartir, admin: vistaAdmin };
 let turno = 0;
 
 async function render() {
@@ -692,7 +802,7 @@ async function render() {
     if (boton.dataset.vista === estado.vista) boton.setAttribute('aria-current', 'page');
     else boton.removeAttribute('aria-current');
   }
-  if (!libroActual()) {
+  if (!libroActual() && estado.vista !== 'admin') {
     cont.replaceChildren(h('p', { class: 'vacio' }, 'No tienes ningún libro. Crea uno con «+ Libro».'));
     return;
   }

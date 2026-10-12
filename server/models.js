@@ -16,7 +16,7 @@ const usuarioSchema = new Schema(
 const libroSchema = new Schema(
   {
     nombre: { type: String, required: true, trim: true, maxlength: 60 },
-    moneda: { type: String, required: true, default: 'USD', match: /^[A-Z]{3}$/ },
+    moneda: { type: String, required: true, default: 'PEN', match: /^[A-Z]{3}$/ },
     propietario: { type: ObjectId, ref: 'Usuario', required: true, index: true },
     miembros: [
       {
