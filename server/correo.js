@@ -4,9 +4,10 @@ import { config } from './config.js';
 // Tres formas de enviar: la API de Cloudflare Email Service o la de Brevo, ambas por HTTPS (funcionan
 // en hostings que bloquean los puertos de correo, como el plan gratuito de Render), o un servidor SMTP.
 const c = config.correo;
+// Si hay varios configurados, manda Brevo: basta con añadir su clave para cambiar a él.
 const metodo = !c.remitente ? null
-  : c.cuentaCloudflare && c.tokenCloudflare ? 'cloudflare'
   : c.claveBrevo ? 'brevo'
+  : c.cuentaCloudflare && c.tokenCloudflare ? 'cloudflare'
   : c.smtpHost ? 'smtp'
   : null;
 
