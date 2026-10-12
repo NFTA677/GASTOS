@@ -41,7 +41,9 @@ async function api(ruta, { method = 'GET', body } = {}) {
   const datos = res.status === 204 ? null : await res.json().catch(() => null);
   if (!res.ok) {
     if (res.status === 401 && estado.usuario) mostrarAcceso();
-    throw new Error(datos?.error ?? 'No se pudo completar la operación');
+    const error = new Error(datos?.error ?? 'No se pudo completar la operación');
+    error.estado = res.status;
+    throw error;
   }
   return datos;
 }
@@ -737,6 +739,8 @@ pintarModoAcceso();
 try {
   const { usuario } = await api('/auth/yo');
   await entrar(usuario);
-} catch {
+} catch (err) {
   mostrarAcceso();
+  // Sin sesión (401) es lo normal; un fallo del servidor sí se le cuenta al usuario.
+  if (err.estado !== 401) $('#auth-error').textContent = err.message;
 }
