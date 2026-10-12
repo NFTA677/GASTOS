@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import compression from 'compression';
 import { config } from './config.js';
 import { conectar, desconectar, estadoBd } from './db.js';
 import { rutasAuth, requiereSesion, requiereAdmin } from './auth.js';
@@ -19,6 +20,8 @@ app.disable('x-powered-by');
 if (config.produccion) app.set('trust proxy', 1);
 // Sin upgrade-insecure-requests para que funcione por http en la red local.
 app.use(helmet({ contentSecurityPolicy: { directives: { upgradeInsecureRequests: null } } }));
+// Respuestas comprimidas: la interfaz y los listados viajan en una fracción de su tamaño.
+app.use(compression());
 app.use(express.json({ limit: '50kb' }));
 app.use(cookieParser());
 
@@ -31,7 +34,12 @@ app.use('/api/auth', rutasAuth);
 app.use('/api/admin', requiereSesion, requiereAdmin, rutasAdmin);
 app.use('/api', requiereSesion, rutasApi);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
-app.use(express.static(publico));
+app.use(express.static(publico, {
+  setHeaders(res, ruta) {
+    // Los iconos no cambian: el navegador puede guardarlos una semana sin volver a preguntar.
+    if (ruta.includes(`${path.sep}icons${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=604800');
+  },
+}));
 app.use(manejarErrores);
 
 // Primero se abre el puerto (el hosting lo exige para dar el servicio por arrancado) y luego la base.

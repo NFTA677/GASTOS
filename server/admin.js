@@ -2,7 +2,7 @@ import { Router } from 'express';
 import mongoose from 'mongoose';
 import { config } from './config.js';
 import { Usuario, Libro, Movimiento } from './models.js';
-import { crearUsuario, cambiarPassword } from './auth.js';
+import { crearUsuario, cambiarPassword, olvidarCuenta } from './auth.js';
 import { ErrorHttp } from './errores.js';
 import { wa, conectarWhatsapp, desconectarWhatsapp, enviarEstadoDeCuenta } from './whatsapp.js';
 import { estadoIa, guardarIa, probarIa } from './ia.js';
@@ -35,6 +35,11 @@ async function usoDelCluster() {
 export const rutasAdmin = Router();
 
 rutasAdmin.get('/almacenamiento', async (req, res) => {
+  // Tiempo de ida y vuelta a la base: si es alto, el servidor y la base están en regiones alejadas.
+  const inicio = performance.now();
+  await mongoose.connection.db.admin().ping();
+  const latenciaMs = Math.round(performance.now() - inicio);
+
   const [{ bases, completo }, usuarios, libros, movimientos, statsMov] = await Promise.all([
     usoDelCluster(),
     Usuario.countDocuments(),
@@ -57,6 +62,7 @@ rutasAdmin.get('/almacenamiento', async (req, res) => {
     porcentaje: Math.min(100, (usado / limite) * 100),
     movimientosQueCaben: Math.floor(libre / porMovimiento),
     clusterCompleto: completo,
+    latenciaMs,
     bases: bases.sort((a, b) => b.bytes - a.bytes),
     totales: { usuarios, libros, movimientos },
   });
@@ -143,6 +149,7 @@ rutasAdmin.delete('/usuarios/:id', async (req, res) => {
   await Libro.deleteMany({ _id: { $in: libros } });
   await Libro.updateMany({ 'miembros.usuario': usuario._id }, { $pull: { miembros: { usuario: usuario._id } } });
   await usuario.deleteOne();
+  olvidarCuenta(usuario.id);
   res.json({ eliminado: { nombre: usuario.nombre, libros: libros.length, movimientos } });
 });
 

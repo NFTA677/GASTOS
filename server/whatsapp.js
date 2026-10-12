@@ -301,6 +301,9 @@ async function atender(sock, mensaje) {
   if (ahora - (ultimoMensaje.get(numero) ?? 0) < 1000) return;
   ultimoMensaje.set(numero, ahora);
 
+  // «Escribiendo…» aparece al momento, sin esperar a tener lista la respuesta.
+  sock.sendPresenceUpdate('composing', jid).catch(() => {});
+
   const ia = await iaDisponible();
   const comando = await responder(usuario, texto, { conIa: ia.disponible });
   if (comando) return enviarRespuesta(jid, comando);

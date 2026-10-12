@@ -225,8 +225,9 @@ libro.delete('/miembros/:usuarioId', async (req, res) => {
 
 // ---------- movimientos ----------
 
+// Vale tanto para documentos de Mongoose como para los objetos planos de las consultas «lean».
 const movPublico = (m) => ({
-  id: m.id,
+  id: String(m._id),
   tipo: m.tipo,
   descripcion: m.descripcion,
   categoria: m.categoria,
@@ -273,6 +274,25 @@ async function cargarMovimiento(req) {
   if (!mov) throw new ErrorHttp(404, 'Movimiento no encontrado');
   return mov;
 }
+
+// Todo lo que pinta la vista del mes en una sola petición: el mes pedido, el siguiente y los pendientes.
+// ?mes=AAAA-MM&hasta=AAAA-MM-DD
+libro.get('/mes', async (req, res) => {
+  const mes = req.query.mes;
+  if (typeof mes !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) throw new ErrorHttp(400, 'Mes inválido');
+  const hasta = leerFecha(req.query.hasta, 'la fecha límite');
+  const inicio = new Date(`${mes}-01T00:00:00Z`);
+  const siguiente = sumarMeses(inicio, 1);
+  const delLibro = { libro: req.libro._id };
+
+  // Las tres consultas van a la vez y sin convertir a documentos de Mongoose, que aquí no hacen falta.
+  const [actual, proximo, pendientes] = await Promise.all([
+    Movimiento.find({ ...delLibro, fecha: { $gte: inicio, $lt: siguiente } }).sort({ fecha: 1, createdAt: 1 }).lean(),
+    Movimiento.find({ ...delLibro, fecha: { $gte: siguiente, $lt: sumarMeses(inicio, 2) } }).sort({ fecha: 1, createdAt: 1 }).lean(),
+    Movimiento.find({ ...delLibro, pagado: false, fecha: { $lte: hasta } }).sort({ fecha: 1 }).limit(100).lean(),
+  ]);
+  res.json({ actual: actual.map(movPublico), proximo: proximo.map(movPublico), pendientes: pendientes.map(movPublico) });
+});
 
 // ?mes=AAAA-MM
 libro.get('/movimientos', async (req, res) => {

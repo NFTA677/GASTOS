@@ -61,13 +61,20 @@ export async function requiereSesion(req, res, next) {
   } catch {
     // Sin cookie o con una caducada o manipulada.
   }
-  // Se comprueba que la cuenta siga existiendo: así una cuenta eliminada pierde el acceso al momento.
-  if (!id || !(await Usuario.exists({ _id: id }))) {
-    return res.status(401).json({ error: 'Inicia sesión para continuar' });
+  // Se comprueba que la cuenta siga existiendo, para que una eliminada pierda el acceso al momento.
+  // La comprobación se recuerda un minuto: así no cuesta una consulta a la base en cada petición.
+  if (id && (cuentasVistas.get(id) ?? 0) < Date.now()) {
+    if (await Usuario.exists({ _id: id })) cuentasVistas.set(id, Date.now() + 60_000);
+    else id = null;
   }
+  if (!id) return res.status(401).json({ error: 'Inicia sesión para continuar' });
   req.usuario = { id };
   next();
 }
+
+const cuentasVistas = new Map();
+// Al eliminar una cuenta se olvida al instante, sin esperar al minuto.
+export const olvidarCuenta = (id) => cuentasVistas.delete(String(id));
 
 // Alta de una cuenta con su libro «Personal»; la usan el registro y el administrador.
 export async function crearUsuario(cuerpo, { whatsappObligatorio = false } = {}) {

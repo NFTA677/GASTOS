@@ -57,7 +57,14 @@ function descifrar(valor) {
   }
 }
 
-const guardadoIa = async () => (await Ajuste.findById('ia'))?.valor ?? {};
+// Los ajustes se consultan en cada mensaje del bot, así que se recuerdan un minuto en memoria.
+let ajustesEnMemoria = { hasta: 0, valor: null };
+async function guardadoIa() {
+  if (Date.now() >= ajustesEnMemoria.hasta) {
+    ajustesEnMemoria = { hasta: Date.now() + 60_000, valor: (await Ajuste.findById('ia').lean())?.valor ?? {} };
+  }
+  return ajustesEnMemoria.valor;
+}
 
 // Clave y modelo de un proveedor. La variable de entorno manda sobre lo guardado en el panel.
 function deProveedor(guardado, id) {
@@ -128,6 +135,7 @@ export async function guardarIa({ proveedor, clave, modelo, activa, responderTod
   if (typeof activa === 'boolean') nuevo.activa = activa;
   if (typeof responderTodo === 'boolean') nuevo.responderTodo = responderTodo;
   await Ajuste.findByIdAndUpdate('ia', { valor: nuevo }, { upsert: true });
+  ajustesEnMemoria = { hasta: 0, valor: null };
   return estadoIa();
 }
 

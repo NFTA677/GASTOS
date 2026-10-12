@@ -179,7 +179,7 @@ El dueño del número del bot puede escribirle desde su propio chat («Mensaje a
 
 El administrador es la primera cuenta registrada, o las que se indiquen en `ADMIN_EMAILS`. Ve la sección **Admin**, con cuatro apartados.
 
-- **Almacenamiento:** espacio usado y libre en MongoDB (512 MB en el plan gratuito de Atlas), una estimación de cuántos movimientos caben y un aviso al superar el 80 %. Suma todas las bases de datos del clúster, porque el límite es compartido.
+- **Almacenamiento:** espacio usado y libre en MongoDB (512 MB en el plan gratuito de Atlas), una estimación de cuántos movimientos caben y un aviso al superar el 80 %. Suma todas las bases de datos del clúster, porque el límite es compartido. También muestra el **tiempo de respuesta de la base de datos**: cada pantalla y cada respuesta del bot hacen varias consultas, así que si supera unos 150 ms conviene que el clúster de Atlas y el servidor estén en la misma región.
 - **Usuarios:** lista con correo, WhatsApp, fecha de alta y número de libros. Permite crear cuentas, ponerles una contraseña nueva, enviarles su estado de cuenta por WhatsApp y eliminarlas. Al eliminar una cuenta se borran sus libros y movimientos, y pierde el acceso al instante.
 - **WhatsApp:** vinculación del bot, estado y envío del estado de cuenta a todos los usuarios con número.
 - **IA:** proveedor (Claude o NVIDIA), clave, modelo, activación y «Probar conexión». Las claves se guardan cifradas y solo se muestran sus cuatro últimos caracteres.

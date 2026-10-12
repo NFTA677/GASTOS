@@ -454,23 +454,38 @@ $('#form-mov').addEventListener('submit', async (ev) => {
       if (creados > 1) avisar(`Se crearon ${creados} movimientos (el de hoy y ${creados - 1} repeticiones)`);
     }
     $('#dlg-mov').close();
+    datosRecordados.clear();
     render();
   } catch (err) {
     $('#mov-error').textContent = err.message;
   }
 });
 
-const marcarPagado = (mov, pagado) =>
-  intentar(async () => {
+// El cambio se pinta al instante y se confirma con el servidor después; si falla, se recarga lo real.
+async function marcarPagado(mov, pagado) {
+  const datos = memoria.vista === 'mes' ? memoria.datos : null;
+  if (datos) {
+    for (const lista of [datos.actual, datos.proximo, datos.pendientes]) {
+      for (const m of lista) if (m.id === mov.id) m.pagado = pagado;
+    }
+    if (pagado) datos.pendientes = datos.pendientes.filter((m) => m.id !== mov.id);
+    render(true);
+  }
+  datosRecordados.clear();
+  try {
     await api(`/libros/${estado.libroId}/movimientos/${mov.id}`, { method: 'PATCH', body: { pagado } });
-    render();
-  });
+  } catch (err) {
+    avisar(err.message);
+  }
+  render();
+}
 
 const eliminarMovimiento = (mov) =>
   intentar(async () => {
     if (!confirm(`¿Eliminar «${mov.descripcion}»?`)) return;
     const siguientes = mov.enSerie && confirm('Este movimiento se repite cada mes.\n¿Eliminar también las repeticiones de los meses siguientes?');
     await api(`/libros/${estado.libroId}/movimientos/${mov.id}${siguientes ? '?siguientes=1' : ''}`, { method: 'DELETE' });
+    datosRecordados.clear();
     render();
   });
 
@@ -548,15 +563,8 @@ function segmentos(vista, opciones) {
 
 // ---------- vista: mes ----------
 
-async function cargarMes() {
-  const base = `/libros/${estado.libroId}`;
-  const [actual, proximo, pendientes] = await Promise.all([
-    api(`${base}/movimientos?mes=${estado.mes}`),
-    api(`${base}/movimientos?mes=${moverMes(estado.mes, 1)}`),
-    api(`${base}/pendientes?hasta=${sumarDias(hoy(), 30)}`),
-  ]);
-  return { actual: actual.movimientos, proximo: proximo.movimientos, pendientes: pendientes.movimientos };
-}
+// Una sola petición trae el mes, el siguiente y los pendientes.
+const cargarMes = () => api(`/libros/${estado.libroId}/mes?mes=${estado.mes}&hasta=${sumarDias(hoy(), 30)}`);
 
 // Rejilla del mes: punto rojo si ese día hay un pago sin hacer, punto gris si hay otros movimientos.
 function calendario(movimientos) {
@@ -1300,6 +1308,11 @@ function pintarAdmin(datos) {
           a.clusterCompleto
             ? 'Incluye todas las bases de datos del clúster, porque el límite del plan es compartido.'
             : 'Solo se pudo medir la base de datos de esta app; si el clúster tiene otras, también ocupan espacio.'),
+        h('p', { class: 'tenue nota-medidor' },
+          `Tiempo de respuesta de la base de datos: ${a.latenciaMs} ms. `,
+          a.latenciaMs > 150
+            ? 'Es alto: el servidor y la base de datos están en regiones alejadas, y eso se nota en cada pantalla y en el bot.'
+            : 'Es un buen valor.'),
         a.porcentaje >= 80 && h('p', { class: 'error' }, 'Queda poco espacio. Conviene borrar movimientos antiguos o ampliar el plan de MongoDB.'),
         a.bases.length > 1 && h('div', { class: 'tabla-scroll' },
           h('table', null,
@@ -1472,12 +1485,24 @@ const VISTAS = {
   cuenta: { cargar: async () => null, pintar: pintarCuenta },
   admin: { cargar: cargarAdmin, pintar: pintarAdmin },
 };
-let turno = 0;
+// Número de la última descarga de datos; una descarga más antigua que termine tarde se descarta.
+let cargas = 0;
 // Últimos datos descargados, para repintar (cambio de sección o de día) sin volver a pedirlos.
 let memoria = { vista: null, datos: null };
 
+// Datos ya vistos de cada mes y año: al volver a ellos se pintan al instante mientras se actualizan
+// por detrás. Se vacía con cualquier cambio, porque una repetición puede afectar a varios meses.
+const datosRecordados = new Map();
+function claveRecordada() {
+  if (estado.vista === 'mes') return `mes|${estado.libroId}|${estado.mes}`;
+  if (estado.vista === 'anio') return `anio|${estado.libroId}|${estado.anio}`;
+  return null;
+}
+
+// Lo que se está viendo; si cambia mientras llega una descarga, esa descarga ya no se pinta.
+const loQueSeVe = () => `${estado.vista}|${estado.libroId}|${estado.mes}|${estado.anio}`;
+
 async function render(reutilizar = false) {
-  const miTurno = ++turno;
   const cont = $('#contenido');
   const libro = libroActual();
 
@@ -1492,17 +1517,28 @@ async function render(reutilizar = false) {
     cont.replaceChildren(h('p', { class: 'vacio' }, 'No tienes ningún libro. Abre el menú y crea uno con «+ Nuevo libro».'));
     return;
   }
+  const vista = VISTAS[estado.vista];
+  const pintar = () => cont.replaceChildren(...vista.pintar(memoria.datos).flat().filter(Boolean));
+  // Repintar con lo que ya hay (cambio de sección o de día) no pide nada ni anula una descarga en curso.
+  if (reutilizar && memoria.vista === estado.vista) return pintar();
+
+  const miCarga = ++cargas;
+  const viendo = loQueSeVe();
+  const vigente = () => miCarga === cargas && viendo === loQueSeVe();
   try {
-    const vista = VISTAS[estado.vista];
-    if (!(reutilizar && memoria.vista === estado.vista)) {
-      const datos = await vista.cargar();
-      // Si mientras cargaba se pidió otra vista, se descarta este resultado.
-      if (miTurno !== turno) return;
-      memoria = { vista: estado.vista, datos };
+    const clave = claveRecordada();
+    // Si ya se vio este mes o año, se enseña de inmediato lo recordado y luego se pone al día.
+    if (clave && datosRecordados.has(clave)) {
+      memoria = { vista: estado.vista, datos: datosRecordados.get(clave) };
+      pintar();
     }
-    cont.replaceChildren(...vista.pintar(memoria.datos).flat().filter(Boolean));
+    const datos = await vista.cargar();
+    if (!vigente()) return;
+    if (clave) datosRecordados.set(clave, datos);
+    memoria = { vista: estado.vista, datos };
+    pintar();
   } catch (err) {
-    if (miTurno === turno) cont.replaceChildren(h('p', { class: 'error' }, err.message));
+    if (vigente()) cont.replaceChildren(h('p', { class: 'error' }, err.message));
   }
 }
 
