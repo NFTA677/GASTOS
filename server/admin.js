@@ -2,7 +2,7 @@ import { Router } from 'express';
 import mongoose from 'mongoose';
 import { config } from './config.js';
 import { Usuario, Libro, Movimiento } from './models.js';
-import { crearUsuario } from './auth.js';
+import { crearUsuario, cambiarPassword } from './auth.js';
 import { ErrorHttp } from './errores.js';
 import { wa, conectarWhatsapp, desconectarWhatsapp, enviarEstadoDeCuenta } from './whatsapp.js';
 import { estadoIa, guardarIa, probarIa } from './ia.js';
@@ -65,6 +65,14 @@ rutasAdmin.get('/almacenamiento', async (req, res) => {
 rutasAdmin.post('/usuarios', async (req, res) => {
   const usuario = await crearUsuario(req.body);
   res.status(201).json({ usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email } });
+});
+
+// El administrador pone una contraseña nueva a quien la olvidó.
+rutasAdmin.patch('/usuarios/:id', async (req, res) => {
+  const usuario = mongoose.isValidObjectId(req.params.id) ? await Usuario.findById(req.params.id) : null;
+  if (!usuario) throw new ErrorHttp(404, 'Usuario no encontrado');
+  await cambiarPassword(usuario, req.body.password);
+  res.status(204).end();
 });
 
 // ---------- bot de WhatsApp ----------

@@ -32,11 +32,16 @@
         <label id="campo-whatsapp" hidden>WhatsApp (con código de país)
           <input name="whatsapp" type="tel" inputmode="tel" autocomplete="tel" maxlength="24" placeholder="51 987 654 321">
         </label>
-        <label>Contraseña
+        <label id="campo-codigo" hidden>Código de 6 dígitos
+          <input name="codigo" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="123456">
+        </label>
+        <label id="campo-password"><span id="etiqueta-password">Contraseña</span>
           <input name="password" type="password" minlength="8" maxlength="72" required>
         </label>
+        <p class="tenue" id="auth-info" role="status"></p>
         <p class="error" id="auth-error" role="alert"></p>
         <button class="primario ancho" id="auth-enviar">Entrar</button>
+        <p class="centro olvide"><button class="enlace" id="auth-olvide" type="button">¿Olvidaste tu contraseña?</button></p>
       </form>
       <p class="tenue centro">
         <span id="auth-pregunta">¿No tienes cuenta?</span>

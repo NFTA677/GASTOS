@@ -12,6 +12,10 @@ const usuarioSchema = new Schema(
     whatsapp: { type: String, match: /^\d{10,15}$/ },
     // Libro sobre el que responde el bot; si falta, el primero del usuario.
     libroBot: { type: ObjectId, ref: 'Libro' },
+    // Recuperación de contraseña: huella del código enviado, su caducidad y los intentos fallidos.
+    codigoHash: String,
+    codigoExpira: Date,
+    codigoIntentos: { type: Number, default: 0 },
   },
   { timestamps: true },
 );

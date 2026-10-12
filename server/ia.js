@@ -208,16 +208,51 @@ export function explicarError(err) {
 
 // ---------- conversación ----------
 
-const INSTRUCCIONES = `Eres el asistente de «N.F.T.A Gastos», una app de finanzas personales. Respondes por WhatsApp al dueño de los datos.
+const INSTRUCCIONES = `Eres el asistente de «N.F.T.A Gastos», una app de finanzas personales, y conversas por WhatsApp con el dueño de los datos. Hablas como una persona cercana y amable: tuteas, saludas cuando te saludan (usa el saludo de «saludoPorLaHora» de los datos) y preguntas en qué puedes ayudar. Sé breve: es un chat.
 
-Reglas:
-- Responde solo con la información del bloque <datos>, que contiene las finanzas reales del usuario. Si algo no está en los datos, dilo con claridad en lugar de suponerlo.
+Cómo responder con datos:
+- Usa solo la información del bloque <datos>, que contiene las finanzas reales del usuario. Si algo no está ahí, dilo con claridad en lugar de suponerlo.
 - Usa los totales ya calculados siempre que sirvan, sin recalcularlos. En cada bloque «totales»: «gastos» e «ingresos» son el total del periodo (lo ya pagado más lo pendiente), «gastosPendientes» es la parte de los gastos que falta por pagar (ya está incluida en «gastos», no la restes otra vez), «ingresosPendientes» es lo que falta por cobrar y «balance» es ingresos menos gastos.
 - Cuando tengas que sumar tú (por ejemplo, por categoría), suma solo los movimientos que correspondan y repasa la cuenta.
 - Da las cifras con la moneda del libro.
-- Escribe en español, breve y directo: es un chat de WhatsApp. Para resaltar usa un solo asterisco a cada lado (*así*) y listas con «•». No uses tablas, ni encabezados con #, ni doble asterisco.
-- No puedes crear, editar ni marcar movimientos; si te lo piden, indica que se hace desde la app.
-- Si la pregunta no tiene que ver con las finanzas del usuario, dilo amablemente y recuerda que puede escribir «menu».`;
+- Para resaltar usa un solo asterisco a cada lado (*así*) y listas con «•». No uses tablas, ni encabezados con #, ni doble asterisco.
+
+Qué puedes hacer, además de responder:
+- Registrar un gasto o un ingreso cuando el usuario lo pida con claridad e indique el monto («gasté 30 en taxi ayer», «anota un ingreso de 500 por una venta»). Si falta el monto o no queda claro si es gasto o ingreso, pregunta y no registres nada. La fecha por defecto es «hoy» de los datos; calcula tú las fechas relativas («ayer», «el viernes pasado»). Elige una categoría breve y razonable (Comida, Transporte, Vivienda, Servicios, Salud, Ocio, Salario…). «pagado» es true salvo que diga que aún no lo ha pagado o cobrado, o que la fecha sea futura. Si «puedeRegistrar» es false, explica que en ese libro solo tiene permiso de lectura.
+- Enviar un informe en PDF cuando pida un informe, reporte, PDF o estado de cuenta en archivo. Calcula el periodo: «este mes», «septiembre», «el mes pasado», «todo el año»… Puedes pedir el PDF de cualquier periodo, pasado o futuro, aunque sus movimientos no aparezcan en <datos> (ahí solo ves el mes actual y el siguiente): el sistema los busca al generar el archivo. No digas que no hay registros de un periodo que no ves.
+- Deshacer el último movimiento que el usuario registró por este chat, si lo pide.
+- No puedes editar movimientos existentes, marcarlos como pagados ni borrar otros: eso se hace en la app.
+
+Formato de salida: responde SIEMPRE con un único objeto JSON válido y nada más (sin texto antes ni después, sin bloques de código):
+{"respuesta": "lo que le dices al usuario", "acciones": []}
+«acciones» es una lista, vacía si solo conversas. Cada acción tiene una de estas formas:
+{"tipo": "registrar", "movimiento": {"tipo": "gasto" o "ingreso", "descripcion": "texto corto", "monto": número, "fecha": "AAAA-MM-DD", "categoria": "texto", "pagado": true o false}}
+{"tipo": "pdf", "desde": "AAAA-MM-DD", "hasta": "AAAA-MM-DD"}
+{"tipo": "deshacer"}
+En «respuesta» no afirmes que ya registraste o enviaste algo ni repitas sus detalles: el sistema añade por su cuenta la confirmación exacta y adjunta el PDF. Basta una frase corta y natural, como «¡Listo! Te lo anoto.» o «Claro, aquí va tu informe de septiembre.».
+
+Si te preguntan algo que no tiene que ver con sus finanzas, dilo con amabilidad y recuerda que puede escribir «menu».`;
+
+// Extrae el objeto JSON de la respuesta del modelo; si no lo hay, todo el texto se toma como respuesta.
+function leerSalida(texto) {
+  const limpio = texto.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  const inicio = limpio.indexOf('{');
+  const fin = limpio.lastIndexOf('}');
+  if (inicio !== -1 && fin > inicio) {
+    try {
+      const objeto = JSON.parse(limpio.slice(inicio, fin + 1));
+      if (objeto && typeof objeto === 'object') {
+        return {
+          respuesta: typeof objeto.respuesta === 'string' ? objeto.respuesta : '',
+          acciones: Array.isArray(objeto.acciones) ? objeto.acciones : [],
+        };
+      }
+    } catch {
+      // No era JSON válido: se trata como texto normal.
+    }
+  }
+  return { respuesta: limpio, acciones: [] };
+}
 
 // Últimos turnos por usuario (se pierden al reiniciar; solo dan continuidad a preguntas seguidas).
 const historiales = new Map();
@@ -234,13 +269,15 @@ function dentroDelLimite(usuarioId, hoy) {
 }
 
 /**
- * Responde una pregunta libre con los datos financieros del usuario.
- * «contexto» es el objeto de contextoParaIa(); devuelve el texto para enviar por WhatsApp.
+ * Conversa con el usuario sobre sus finanzas.
+ * «contexto» es el objeto de contextoParaIa(). Devuelve { texto, acciones }: el texto para WhatsApp
+ * y las acciones que el modelo propone (registrar, pdf, deshacer), que valida y ejecuta quien llama.
  */
 export async function preguntar(usuario, contexto, pregunta) {
+  const soloTexto = (texto) => ({ texto, acciones: [] });
   const ajustes = await leerAjustes();
   if (!ajustes.activa || !ajustes.clave) return null;
-  if (!dentroDelLimite(usuario.id, contexto.hoy)) return `Has llegado al límite de ${MAX_PREGUNTAS_DIA} preguntas a la IA por hoy. Los comandos (escribe *menu*) siguen funcionando.`;
+  if (!dentroDelLimite(usuario.id, contexto.hoy)) return soloTexto(`Has llegado al límite de ${MAX_PREGUNTAS_DIA} mensajes a la IA por hoy. Los comandos (escribe *menu*) siguen funcionando.`);
 
   const historial = historiales.get(usuario.id) ?? [];
   // Los datos van en el mensaje del usuario, después del historial, para que siempre sean los actuales.
@@ -254,15 +291,18 @@ export async function preguntar(usuario, contexto, pregunta) {
     respuesta = await pedir(ajustes, { system: INSTRUCCIONES, messages: mensajes });
   } catch (err) {
     console.error('IA:', explicarError(err), err.message);
-    return 'Ahora mismo no puedo consultar la IA. Escribe *menu* para usar los comandos.';
+    return soloTexto('Ahora mismo no puedo consultar la IA. Escribe *menu* para usar los comandos.');
   }
-  if (respuesta.rechazo) return 'No puedo ayudarte con esa pregunta. Escribe *menu* para ver lo que sí puedo hacer.';
+  if (respuesta.rechazo) return soloTexto('No puedo ayudarte con esa pregunta. Escribe *menu* para ver lo que sí puedo hacer.');
 
-  const texto = paraWhatsapp(respuesta.texto);
-  if (!texto) return 'No he podido preparar una respuesta. Prueba a preguntarlo de otra forma.';
-  // En el historial se guarda la pregunta sin los datos, para no acumularlos en cada turno.
-  historiales.set(usuario.id, [...historial, { role: 'user', content: pregunta }, { role: 'assistant', content: texto }].slice(-TURNOS_RECORDADOS * 2));
-  return texto;
+  const salida = leerSalida(respuesta.texto);
+  const texto = paraWhatsapp(salida.respuesta);
+  if (!texto && salida.acciones.length === 0) return soloTexto('No he podido preparar una respuesta. Prueba a decírmelo de otra forma.');
+  // En el historial se guarda la pregunta sin los datos, para no acumularlos en cada turno,
+  // y la respuesta en el mismo formato JSON que se le pide al modelo.
+  const turno = JSON.stringify({ respuesta: texto, acciones: salida.acciones });
+  historiales.set(usuario.id, [...historial, { role: 'user', content: pregunta }, { role: 'assistant', content: turno }].slice(-TURNOS_RECORDADOS * 2));
+  return { texto, acciones: salida.acciones };
 }
 
 // Prueba de la configuración desde el panel: una pregunta mínima para comprobar clave y modelo.

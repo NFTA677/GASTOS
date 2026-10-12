@@ -4,7 +4,10 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
 import { Usuario, Libro } from './models.js';
+import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import { ErrorHttp, texto } from './errores.js';
+import { whatsappConectado, enviarANumero } from './whatsapp.js';
+import { correoDisponible, enviarCorreo } from './correo.js';
 
 const COOKIE = 'sesion';
 const DURACION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -72,11 +75,8 @@ export async function crearUsuario(cuerpo, { whatsappObligatorio = false } = {})
   if (whatsappObligatorio && !whatsapp) throw new ErrorHttp(400, 'Falta el número de WhatsApp');
   const nombre = texto(cuerpo.nombre, 'el nombre', 60);
   const email = texto(cuerpo.email, 'el correo').toLowerCase();
-  const password = cuerpo.password;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ErrorHttp(400, 'El correo no es válido');
-  if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
-    throw new ErrorHttp(400, 'La contraseña debe tener entre 8 y 72 caracteres');
-  }
+  const password = leerPassword(cuerpo.password);
   if (await Usuario.exists({ email })) throw new ErrorHttp(409, 'Ya existe una cuenta con ese correo');
   if (whatsapp) await whatsappLibre(whatsapp);
 
@@ -120,6 +120,87 @@ rutasAuth.post('/login', limite, async (req, res) => {
 rutasAuth.post('/logout', (req, res) => {
   res.clearCookie(COOKIE);
   res.status(204).end();
+});
+
+// ---------- recuperación de contraseña ----------
+
+const MINUTOS_CODIGO = 15;
+const MAX_INTENTOS_CODIGO = 5;
+const huella = (usuarioId, codigo) => createHash('sha256').update(`${usuarioId}:${codigo}:${config.jwtSecret}`).digest();
+
+function leerPassword(password) {
+  if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
+    throw new ErrorHttp(400, 'La contraseña debe tener entre 8 y 72 caracteres');
+  }
+  return password;
+}
+
+// La usan la recuperación por código y el administrador.
+export async function cambiarPassword(usuario, password) {
+  usuario.passwordHash = await bcrypt.hash(leerPassword(password), 11);
+  usuario.codigoHash = undefined;
+  usuario.codigoExpira = undefined;
+  usuario.codigoIntentos = 0;
+  await usuario.save();
+}
+
+// Por dónde puede llegar el código, para que la pantalla de acceso lo explique.
+rutasAuth.get('/recuperacion', (req, res) => {
+  res.json({ whatsapp: whatsappConectado(), correo: correoDisponible() });
+});
+
+rutasAuth.post('/olvide', limite, async (req, res) => {
+  const email = texto(req.body.email, 'el correo').toLowerCase();
+  const porWhatsapp = whatsappConectado();
+  const porCorreo = correoDisponible();
+  if (!porWhatsapp && !porCorreo) {
+    throw new ErrorHttp(503, 'La recuperación automática no está disponible ahora. Pide al administrador que te ponga una contraseña nueva.');
+  }
+
+  const usuario = await Usuario.findOne({ email });
+  if (usuario) {
+    const codigo = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    usuario.codigoHash = huella(usuario.id, codigo).toString('hex');
+    usuario.codigoExpira = new Date(Date.now() + MINUTOS_CODIGO * 60000);
+    usuario.codigoIntentos = 0;
+    await usuario.save();
+
+    const mensaje = `Tu código para cambiar la contraseña de N.F.T.A Gastos es *${codigo}*. Caduca en ${MINUTOS_CODIGO} minutos. Si no lo pediste, ignora este mensaje.`;
+    // Los envíos no se esperan: así la respuesta tarda lo mismo exista o no la cuenta.
+    if (porWhatsapp && usuario.whatsapp) {
+      enviarANumero(usuario.whatsapp, { texto: `🔐 ${mensaje}` }).catch((err) => console.error('Código por WhatsApp:', err.message));
+    }
+    if (porCorreo) {
+      enviarCorreo({ para: usuario.email, asunto: 'Tu código para cambiar la contraseña', texto: mensaje.replace(/\*/g, '') })
+        .catch((err) => console.error('Código por correo:', err.message));
+    }
+  }
+
+  // Misma respuesta exista o no la cuenta, para no revelar qué correos están registrados.
+  const canales = [porWhatsapp && 'WhatsApp', porCorreo && 'correo'].filter(Boolean).join(' y por ');
+  res.json({ mensaje: `Si hay una cuenta con ese correo, le hemos enviado un código por ${canales}. Caduca en ${MINUTOS_CODIGO} minutos.` });
+});
+
+rutasAuth.post('/restablecer', limite, async (req, res) => {
+  const email = texto(req.body.email, 'el correo').toLowerCase();
+  const codigo = typeof req.body.codigo === 'string' ? req.body.codigo.replace(/\D/g, '') : '';
+  const password = leerPassword(req.body.password);
+  const invalido = new ErrorHttp(400, 'El código no es correcto o ha caducado. Pide uno nuevo.');
+
+  const usuario = await Usuario.findOne({ email });
+  if (!usuario?.codigoHash || !usuario.codigoExpira || usuario.codigoExpira < new Date() || usuario.codigoIntentos >= MAX_INTENTOS_CODIGO) throw invalido;
+
+  const esperado = Buffer.from(usuario.codigoHash, 'hex');
+  const recibido = huella(usuario.id, codigo);
+  if (esperado.length !== recibido.length || !timingSafeEqual(esperado, recibido)) {
+    usuario.codigoIntentos += 1;
+    await usuario.save();
+    throw invalido;
+  }
+
+  await cambiarPassword(usuario, password);
+  iniciarSesion(res, usuario);
+  res.json({ usuario: await publico(usuario) });
 });
 
 // Cambiar el nombre o el WhatsApp de la propia cuenta (un WhatsApp vacío lo quita).

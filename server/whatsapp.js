@@ -15,7 +15,7 @@ import makeWASocket, {
 } from 'baileys';
 import QRCode from 'qrcode';
 import { SesionWa, Usuario } from './models.js';
-import { responder, estadoDeCuenta, contextoParaIa, librosDe, textoMenu } from './bot.js';
+import { responder, estadoDeCuenta, contextoParaIa, ejecutarAcciones, librosDe, textoMenu } from './bot.js';
 import { iaDisponible, preguntar } from './ia.js';
 
 // Estado visible para el panel del administrador.
@@ -233,6 +233,16 @@ async function enviarRespuesta(jid, respuesta) {
   }
 }
 
+export const whatsappConectado = () => wa.estado === 'conectado';
+
+// Envía un texto (y opcionalmente un PDF) a un número con código de país.
+export async function enviarANumero(numero, respuesta) {
+  if (!whatsappConectado()) throw new Error('WhatsApp no está conectado');
+  const [destino] = await socket.onWhatsApp(numero);
+  if (!destino?.exists) throw new Error('Ese número no tiene WhatsApp');
+  await enviarRespuesta(destino.jid, respuesta);
+}
+
 // Envía el estado de cuenta a un usuario por iniciativa del administrador.
 export async function enviarEstadoDeCuenta(usuario) {
   if (wa.estado !== 'conectado') throw new Error('WhatsApp no está conectado');
@@ -303,7 +313,14 @@ async function atender(sock, mensaje) {
   if (ia.disponible && pregunta) {
     const contexto = await contextoParaIa(usuario);
     const respuesta = contexto && (await preguntar(usuario, contexto, pregunta));
-    if (respuesta) return enviar(jid, { text: respuesta });
+    if (respuesta) {
+      // Lo que la IA propone hacer (registrar, PDF, deshacer) se valida y ejecuta aquí, no en el modelo.
+      const { textos, pdfs } = await ejecutarAcciones(usuario, respuesta.acciones);
+      const mensaje = [respuesta.texto, ...textos].filter(Boolean).join('\n\n');
+      if (mensaje) await enviar(jid, { text: mensaje });
+      for (const informe of pdfs) await enviarRespuesta(jid, informe);
+      return;
+    }
   }
   // Se dirigió al bot pero no hay IA (o no escribió nada tras «ia»): se le muestra el menú.
   if (conPrefijo) {

@@ -2,7 +2,11 @@ import { Router } from 'express';
 import mongoose from 'mongoose';
 import { Usuario, Libro, Movimiento } from './models.js';
 import { ErrorHttp, texto } from './errores.js';
+import rateLimit from 'express-rate-limit';
 import { generarInforme } from './informe.js';
+import { informePeriodo } from './bot.js';
+import { whatsappConectado, enviarANumero } from './whatsapp.js';
+import { correoDisponible, enviarCorreo, sinFormatoWhatsapp } from './correo.js';
 
 const MAX_REPETICIONES = 366;
 const redondear = (n) => Math.round(n * 100) / 100;
@@ -116,6 +120,12 @@ const libroPublico = (libro, usuarioId) => ({
 });
 
 export const rutasApi = Router();
+
+// Por dónde se puede enviar un estado de cuenta ahora mismo, y los datos de contacto de quien pregunta.
+rutasApi.get('/canales', async (req, res) => {
+  const usuario = await Usuario.findById(req.usuario.id).select('email whatsapp');
+  res.json({ correo: correoDisponible(), whatsapp: whatsappConectado(), miCorreo: usuario.email, miWhatsapp: usuario.whatsapp ?? '' });
+});
 
 // ---------- libros ----------
 
@@ -348,6 +358,61 @@ libro.get('/informe.pdf', async (req, res) => {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="gastos_${fechaTexto(desde)}_a_${fechaTexto(hasta)}.pdf"`);
   generarInforme(res, { libro: req.libro, desde, hasta, movimientos });
+});
+
+// ---------- enviar el estado de cuenta ----------
+
+const limiteEnvios = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  keyGenerator: (req) => req.usuario.id,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Has hecho muchos envíos seguidos. Prueba de nuevo dentro de una hora.' },
+});
+
+// { canal: 'whatsapp' | 'correo', desde, hasta, para? }. Por WhatsApp solo se envía al número de quien lo pide.
+libro.post('/enviar', limiteEnvios, async (req, res) => {
+  const desde = leerFecha(req.body.desde, 'la fecha inicial');
+  const hasta = leerFecha(req.body.hasta, 'la fecha final');
+  if (hasta < desde) throw new ErrorHttp(400, 'La fecha final debe ser posterior a la inicial');
+  if (hasta - desde > 3 * 366 * 24 * 60 * 60 * 1000) throw new ErrorHttp(400, 'El periodo no puede superar los 3 años');
+
+  const usuario = await Usuario.findById(req.usuario.id);
+  const { canal } = req.body;
+
+  if (canal === 'whatsapp') {
+    if (!usuario.whatsapp) throw new ErrorHttp(400, 'Añade tu número de WhatsApp en «Mi cuenta» para recibirlo ahí');
+    if (!whatsappConectado()) throw new ErrorHttp(409, 'El bot de WhatsApp no está conectado ahora');
+    const informe = await informePeriodo(req.libro, desde, hasta);
+    try {
+      await enviarANumero(usuario.whatsapp, informe);
+    } catch (err) {
+      throw new ErrorHttp(502, `No se pudo enviar por WhatsApp: ${err.message}`);
+    }
+    return res.json({ destino: `+${usuario.whatsapp}` });
+  }
+
+  if (canal === 'correo') {
+    const para = texto(req.body.para, 'el correo de destino').toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(para)) throw new ErrorHttp(400, 'El correo de destino no es válido');
+    if (!correoDisponible()) throw new ErrorHttp(409, 'El envío por correo no está configurado en el servidor');
+    const informe = await informePeriodo(req.libro, desde, hasta);
+    try {
+      await enviarCorreo({
+        para,
+        asunto: `Estado de cuenta · ${req.libro.nombre} · ${informe.periodo}`,
+        texto: `${sinFormatoWhatsapp(informe.texto).replace(/^\S+\s/, '')}\n\nEl detalle de gastos e ingresos va en el PDF adjunto.\nEnviado por ${usuario.nombre} desde N.F.T.A Gastos.`,
+        adjuntos: [informe.pdf],
+      });
+    } catch (err) {
+      console.error('Correo:', err.message);
+      throw new ErrorHttp(502, 'No se pudo enviar el correo. Revisa la configuración del servidor de correo.');
+    }
+    return res.json({ destino: para });
+  }
+
+  throw new ErrorHttp(400, 'Canal de envío inválido');
 });
 
 // ---------- resumen anual ----------

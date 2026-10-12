@@ -43,5 +43,15 @@ export const config = {
   claveIa: process.env.ANTHROPIC_API_KEY?.trim() || '',
   // Clave de la API de NVIDIA (build.nvidia.com), la alternativa a Claude para la IA del bot.
   claveNvidia: process.env.NVIDIA_API_KEY?.trim() || '',
+  // Envío de correo: clave de Brevo (por HTTPS) o un servidor SMTP. Hace falta el remitente en ambos casos.
+  correo: {
+    remitente: process.env.CORREO_REMITENTE?.trim() || '',
+    nombreRemitente: process.env.CORREO_NOMBRE?.trim() || 'N.F.T.A Gastos',
+    claveBrevo: process.env.BREVO_API_KEY?.trim() || '',
+    smtpHost: process.env.SMTP_HOST?.trim() || '',
+    smtpPuerto: Number(process.env.SMTP_PORT) || 587,
+    smtpUsuario: process.env.SMTP_USER?.trim() || '',
+    smtpClave: process.env.SMTP_PASS || '',
+  },
   produccion: process.env.NODE_ENV === 'production',
 };

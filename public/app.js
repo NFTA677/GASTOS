@@ -23,6 +23,8 @@ const estado = {
   mes: hoy().slice(0, 7),
   dia: hoy(),
   anio: Number(hoy().slice(0, 4)),
+  // Periodo elegido en «Compartir» para enviar el estado de cuenta.
+  envio: { periodo: 'mes', desde: `${hoy().slice(0, 7)}-01`, hasta: hoy() },
   // Sección visible dentro de cada vista (los botones que evitan desplazarse).
   seccion: { mes: 'calendario', anio: 'grafica', admin: 'almacenamiento' },
 };
@@ -134,7 +136,14 @@ function irAMes(mes) {
 
 // ---------- acceso ----------
 
-let modoRegistro = false;
+// entrar | registro | olvide (pedir el código) | codigo (escribirlo junto a la contraseña nueva)
+let modoAcceso = 'entrar';
+const MODOS_ACCESO = {
+  entrar: { boton: 'Entrar', pregunta: '¿No tienes cuenta?', cambiar: 'Crear una', destino: 'registro' },
+  registro: { boton: 'Crear cuenta', pregunta: '¿Ya tienes cuenta?', cambiar: 'Entrar', destino: 'entrar' },
+  olvide: { boton: 'Enviarme un código', pregunta: '¿La recordaste?', cambiar: 'Volver a entrar', destino: 'entrar' },
+  codigo: { boton: 'Cambiar contraseña', pregunta: '¿No te llegó el código?', cambiar: 'Pedir otro', destino: 'olvide' },
+};
 
 function mostrarAcceso() {
   estado.usuario = null;
@@ -143,32 +152,54 @@ function mostrarAcceso() {
   $('#auth').hidden = false;
 }
 
-function pintarModoAcceso() {
-  $('#campo-nombre').hidden = !modoRegistro;
-  $('#campo-nombre input').required = modoRegistro;
-  $('#campo-whatsapp').hidden = !modoRegistro;
-  $('#campo-whatsapp input').required = modoRegistro;
-  $('#auth-enviar').textContent = modoRegistro ? 'Crear cuenta' : 'Entrar';
-  $('#auth-pregunta').textContent = modoRegistro ? '¿Ya tienes cuenta?' : '¿No tienes cuenta?';
-  $('#auth-cambiar').textContent = modoRegistro ? 'Entrar' : 'Crear una';
-  $('#form-auth [name=password]').autocomplete = modoRegistro ? 'new-password' : 'current-password';
+function pintarModoAcceso(modo = modoAcceso, info = '') {
+  modoAcceso = modo;
+  const textos = MODOS_ACCESO[modo];
+  // Qué campos pide cada modo.
+  const mostrar = (selector, visible) => {
+    $(selector).hidden = !visible;
+    $(`${selector} input`).required = visible;
+  };
+  mostrar('#campo-nombre', modo === 'registro');
+  mostrar('#campo-whatsapp', modo === 'registro');
+  mostrar('#campo-codigo', modo === 'codigo');
+  mostrar('#campo-password', modo !== 'olvide');
+  $('#etiqueta-password').textContent = modo === 'codigo' ? 'Contraseña nueva' : 'Contraseña';
+  $('#form-auth [name=password]').autocomplete = modo === 'entrar' ? 'current-password' : 'new-password';
+  $('#auth-enviar').textContent = textos.boton;
+  $('#auth-pregunta').textContent = textos.pregunta;
+  $('#auth-cambiar').textContent = textos.cambiar;
+  $('#auth-olvide').parentElement.hidden = modo !== 'entrar';
+  $('#auth-info').textContent = info || (modo === 'olvide' ? 'Escribe el correo de tu cuenta y te enviaremos un código para poner una contraseña nueva.' : '');
   $('#auth-error').textContent = '';
 }
 
-$('#auth-cambiar').addEventListener('click', () => {
-  modoRegistro = !modoRegistro;
-  pintarModoAcceso();
-});
+$('#auth-cambiar').addEventListener('click', () => pintarModoAcceso(MODOS_ACCESO[modoAcceso].destino));
+$('#auth-olvide').addEventListener('click', () => pintarModoAcceso('olvide'));
 
 $('#form-auth').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const form = ev.target;
-  const body = { email: form.email.value, password: form.password.value };
-  if (modoRegistro) Object.assign(body, { nombre: form.nombre.value, whatsapp: form.whatsapp.value });
+  const email = form.email.value;
   try {
-    const { usuario } = await api(modoRegistro ? '/auth/registro' : '/auth/login', { method: 'POST', body });
+    if (modoAcceso === 'olvide') {
+      const { mensaje } = await api('/auth/olvide', { method: 'POST', body: { email } });
+      form.password.value = '';
+      pintarModoAcceso('codigo', mensaje);
+      return;
+    }
+    const peticiones = {
+      entrar: ['/auth/login', { email, password: form.password.value }],
+      registro: ['/auth/registro', { email, password: form.password.value, nombre: form.nombre.value, whatsapp: form.whatsapp.value }],
+      codigo: ['/auth/restablecer', { email, password: form.password.value, codigo: form.codigo.value }],
+    };
+    const [ruta, body] = peticiones[modoAcceso];
+    const { usuario } = await api(ruta, { method: 'POST', body });
+    const cambiada = modoAcceso === 'codigo';
     form.reset();
+    pintarModoAcceso('entrar');
     await entrar(usuario);
+    if (cambiada) avisar('Contraseña cambiada');
   } catch (err) {
     $('#auth-error').textContent = err.message;
   }
@@ -779,19 +810,47 @@ function pintarAnio(r) {
 // Primer y último día de un mes «AAAA-MM».
 const rangoDeMes = (mes) => [`${mes}-01`, sumarDias(`${moverMes(mes, 1)}-01`, -1)];
 
+const nombrePdf = (desde, hasta) => `gastos_${libroActual().nombre}_${desde}_a_${hasta}.pdf`;
+
+async function pedirPdf(desde, hasta) {
+  if (!desde || !hasta) throw new Error('Elige las dos fechas');
+  const res = await fetch(`/api/libros/${estado.libroId}/informe.pdf?desde=${desde}&hasta=${hasta}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'No se pudo generar el PDF');
+  return res.blob();
+}
+
+function guardarArchivo(blob, nombre) {
+  const url = URL.createObjectURL(blob);
+  const enlace = h('a', { href: url, download: nombre });
+  document.body.append(enlace);
+  enlace.click();
+  enlace.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
 const descargarPdf = (desde, hasta) =>
   intentar(async () => {
-    if (!desde || !hasta) throw new Error('Elige las dos fechas');
     avisar('Generando el PDF…');
-    const res = await fetch(`/api/libros/${estado.libroId}/informe.pdf?desde=${desde}&hasta=${hasta}`);
-    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'No se pudo generar el PDF');
-    const url = URL.createObjectURL(await res.blob());
-    const enlace = h('a', { href: url, download: `gastos_${libroActual().nombre}_${desde}_a_${hasta}.pdf` });
-    document.body.append(enlace);
-    enlace.click();
-    enlace.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    guardarArchivo(await pedirPdf(desde, hasta), nombrePdf(desde, hasta));
     avisar('PDF descargado');
+  });
+
+// Abre el menú de compartir del dispositivo (correo, WhatsApp, Drive…) con el PDF adjunto.
+const compartirPdf = (desde, hasta) =>
+  intentar(async () => {
+    avisar('Preparando el PDF…');
+    const archivo = new File([await pedirPdf(desde, hasta)], nombrePdf(desde, hasta), { type: 'application/pdf' });
+    if (!navigator.canShare?.({ files: [archivo] })) {
+      guardarArchivo(archivo, archivo.name);
+      avisar('Este dispositivo no permite compartir archivos: se descargó el PDF');
+      return;
+    }
+    try {
+      await navigator.share({ files: [archivo], title: `Estado de cuenta · ${libroActual().nombre}` });
+    } catch (err) {
+      // Cancelar el menú no es un error; cualquier otro fallo acaba en descarga.
+      if (err.name !== 'AbortError') guardarArchivo(archivo, archivo.name);
+    }
   });
 
 function pintarInforme() {
@@ -840,12 +899,51 @@ function pintarInforme() {
 
 // ---------- vista: compartir ----------
 
-const cargarCompartir = async () => (await api(`/libros/${estado.libroId}/miembros`)).miembros;
+async function cargarCompartir() {
+  const [{ miembros }, canales] = await Promise.all([api(`/libros/${estado.libroId}/miembros`), api('/canales')]);
+  return { miembros, canales };
+}
 
-function pintarCompartir(miembros) {
+// Periodo elegido para enviar el estado de cuenta: [desde, hasta].
+function periodoDeEnvio() {
+  const mesHoy = hoy().slice(0, 7);
+  const anio = hoy().slice(0, 4);
+  const e = estado.envio;
+  return {
+    mes: rangoDeMes(mesHoy),
+    pasado: rangoDeMes(moverMes(mesHoy, -1)),
+    siguiente: rangoDeMes(moverMes(mesHoy, 1)),
+    anio: [`${anio}-01-01`, `${anio}-12-31`],
+    fechas: [e.desde, e.hasta],
+  }[e.periodo];
+}
+
+function pintarCompartir({ miembros, canales }) {
   const libro = libroActual();
   const base = `/libros/${libro.id}`;
   const soyPropietario = libro.rol === 'propietario';
+  const mesHoy = hoy().slice(0, 7);
+  const envio = estado.envio;
+
+  const enviarPor = (canal, extra = {}) =>
+    intentar(async () => {
+      const [desde, hasta] = periodoDeEnvio();
+      if (!desde || !hasta) throw new Error('Elige las dos fechas');
+      avisar('Enviando…');
+      const { destino } = await api(`${base}/enviar`, { method: 'POST', body: { canal, desde, hasta, ...extra } });
+      avisar(`Estado de cuenta enviado a ${destino}`);
+    });
+
+  const enviarCorreo = (ev) => {
+    ev.preventDefault();
+    enviarPor('correo', { para: ev.target.para.value });
+  };
+
+  const sinWhatsapp = !canales.whatsapp
+    ? 'El bot de WhatsApp no está conectado ahora.'
+    : !canales.miWhatsapp
+      ? 'Añade tu número en «Mi cuenta» para recibirlo por WhatsApp.'
+      : '';
 
   const cambiarRol = (miembro, rol) =>
     intentar(async () => {
@@ -889,8 +987,55 @@ function pintarCompartir(miembros) {
     h('div', { class: 'periodo' }, h('h2', { class: 'izquierda' }, 'Compartir')),
 
     h('section', { class: 'panel' },
+      h('header', null, h('h3', null, 'Enviar el estado de cuenta'), h('span', { class: 'tenue' }, `libro «${libro.nombre}»`)),
+      h('div', { class: 'form-linea' },
+        h('label', null, 'Periodo',
+          h('select', {
+            'aria-label': 'Periodo del estado de cuenta',
+            onchange: (ev) => {
+              envio.periodo = ev.target.value;
+              render(true);
+            },
+          },
+            [
+              ['mes', `Este mes · ${nombreMes(mesHoy)}`],
+              ['pasado', `Mes pasado · ${nombreMes(moverMes(mesHoy, -1))}`],
+              ['siguiente', `Mes siguiente · ${nombreMes(moverMes(mesHoy, 1))}`],
+              ['anio', `Todo el año ${mesHoy.slice(0, 4)}`],
+              ['fechas', 'Elegir fechas…'],
+            ].map(([valor, etiqueta]) => h('option', { value: valor, selected: valor === envio.periodo }, etiqueta)),
+          )),
+        envio.periodo === 'fechas' && [
+          h('label', { class: 'corto' }, 'Desde', h('input', { type: 'date', value: envio.desde, onchange: (ev) => (envio.desde = ev.target.value) })),
+          h('label', { class: 'corto' }, 'Hasta', h('input', { type: 'date', value: envio.hasta, onchange: (ev) => (envio.hasta = ev.target.value) })),
+        ],
+      ),
+
+      h('div', { class: 'opciones envio' },
+        h('button', { type: 'button', class: 'opcion', disabled: Boolean(sinWhatsapp), onclick: () => enviarPor('whatsapp') },
+          h('strong', null, 'A mi WhatsApp'),
+          h('small', null, sinWhatsapp || `El bot lo envía a +${canales.miWhatsapp}`)),
+        h('button', { type: 'button', class: 'opcion', onclick: () => compartirPdf(...periodoDeEnvio()) },
+          h('strong', null, 'Compartir…'),
+          h('small', null, 'Con las apps de este dispositivo')),
+        h('button', { type: 'button', class: 'opcion', onclick: () => descargarPdf(...periodoDeEnvio()) },
+          h('strong', null, 'Descargar PDF'),
+          h('small', null, 'Guardarlo en este dispositivo')),
+      ),
+
+      h('form', { class: 'form-linea', onsubmit: enviarCorreo },
+        h('label', null, 'Enviar por correo a',
+          h('input', { name: 'para', type: 'email', required: true, value: canales.miCorreo, disabled: !canales.correo })),
+        h('button', { class: 'primario', disabled: !canales.correo }, 'Enviar por correo'),
+      ),
+      !canales.correo && h('p', { class: 'tenue nota-repetir' },
+        'El envío por correo aún no está configurado en el servidor. Mientras tanto, usa «Compartir…» y elige tu app de correo.'),
+      h('p', { class: 'tenue pie-panel' }, 'Se envía un resumen del periodo y el PDF con la lista completa de gastos e ingresos.'),
+    ),
+
+    h('section', { class: 'panel' },
       h('header', null,
-        h('h3', null, libro.nombre),
+        h('h3', null, `Quién ve «${libro.nombre}»`),
         h('span', { class: 'tenue' }, `Moneda: ${libro.moneda} · Tu acceso: ${ROLES[libro.rol].toLowerCase()}`),
         h('span', { class: 'espacio' }),
         soyPropietario && h('button', { type: 'button', class: 'mini', onclick: () => abrirLibro(libro) }, 'Editar'),
@@ -1092,6 +1237,14 @@ function pintarAdmin(datos) {
     });
   };
 
+  const cambiarClave = (u) =>
+    intentar(async () => {
+      const password = prompt(`Contraseña nueva para ${u.nombre} (mínimo 8 caracteres).\nDespués tendrás que comunicársela tú.`);
+      if (password === null) return;
+      await api(`/admin/usuarios/${u.id}`, { method: 'PATCH', body: { password } });
+      avisar(`Contraseña de ${u.nombre} cambiada`);
+    });
+
   const eliminarUsuario = (u) =>
     intentar(async () => {
       const aviso = `¿Eliminar la cuenta de ${u.nombre} (${u.email})?\n\nSe borrarán también sus libros y todos los movimientos que contienen. No se puede deshacer.`;
@@ -1147,6 +1300,7 @@ function pintarAdmin(datos) {
                   h('td', { class: 'acciones-fila' },
                     w.estado === 'conectado' && u.whatsapp &&
                       h('button', { type: 'button', class: 'mini', title: 'Enviarle su estado de cuenta por WhatsApp', onclick: () => enviarEstado(u.id, u.nombre) }, 'Enviar'),
+                    h('button', { type: 'button', class: 'mini', title: 'Ponerle una contraseña nueva', onclick: () => cambiarClave(u) }, 'Contraseña'),
                     u.id !== estado.usuario.id &&
                       h('button', { type: 'button', class: 'mini peligro', onclick: () => eliminarUsuario(u) }, 'Eliminar'),
                   ),
