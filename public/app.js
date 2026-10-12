@@ -105,7 +105,8 @@ function avisar(mensaje) {
   el.textContent = mensaje;
   el.hidden = false;
   clearTimeout(temporizadorAviso);
-  temporizadorAviso = setTimeout(() => (el.hidden = true), 3500);
+  // Los avisos largos (un error con su motivo) se dejan más tiempo para poder leerlos.
+  temporizadorAviso = setTimeout(() => (el.hidden = true), mensaje.length > 80 ? 12000 : 3500);
 }
 
 // Ejecuta una acción y muestra el error como aviso si falla.

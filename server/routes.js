@@ -6,7 +6,8 @@ import rateLimit from 'express-rate-limit';
 import { generarInforme } from './informe.js';
 import { informePeriodo } from './bot.js';
 import { whatsappConectado, enviarANumero } from './whatsapp.js';
-import { correoDisponible, enviarCorreo, sinFormatoWhatsapp } from './correo.js';
+import { correoDisponible, enviarCorreo, metodoCorreo, sinFormatoWhatsapp } from './correo.js';
+import { esAdmin } from './auth.js';
 
 const MAX_REPETICIONES = 366;
 const redondear = (n) => Math.round(n * 100) / 100;
@@ -407,7 +408,9 @@ libro.post('/enviar', limiteEnvios, async (req, res) => {
       });
     } catch (err) {
       console.error('Correo:', err.message);
-      throw new ErrorHttp(502, 'No se pudo enviar el correo. Revisa la configuración del servidor de correo.');
+      // El motivo técnico solo se le enseña al administrador, que es quien puede arreglar la configuración.
+      const motivo = (await esAdmin(usuario)) ? ` Motivo (${metodoCorreo()}): ${err.message}` : ' Avisa al administrador.';
+      throw new ErrorHttp(502, `No se pudo enviar el correo.${motivo}`);
     }
     return res.json({ destino: para });
   }

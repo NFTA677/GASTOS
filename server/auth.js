@@ -22,7 +22,7 @@ function iniciarSesion(res, usuario) {
   });
 }
 
-async function esAdmin(usuario) {
+export async function esAdmin(usuario) {
   if (config.adminEmails.length) return config.adminEmails.includes(usuario.email);
   const primero = await Usuario.findOne().sort({ createdAt: 1 }).select('_id');
   return Boolean(primero?._id.equals(usuario._id));
