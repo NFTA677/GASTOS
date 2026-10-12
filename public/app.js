@@ -733,6 +733,30 @@ async function vistaAdmin() {
   const [a, { usuarios }] = await Promise.all([api('/admin/almacenamiento'), api('/admin/usuarios')]);
   const porcentaje = a.porcentaje < 0.1 && a.usado > 0 ? '< 0.1' : a.porcentaje.toFixed(1);
 
+  const crearUsuario = (ev) => {
+    ev.preventDefault();
+    const form = ev.target;
+    intentar(async () => {
+      const { usuario } = await api('/admin/usuarios', {
+        method: 'POST',
+        body: { nombre: form.nombre.value, email: form.email.value, password: form.password.value },
+      });
+      avisar(`Cuenta creada para ${usuario.nombre}`);
+      render();
+    });
+  };
+
+  const eliminarUsuario = (u) =>
+    intentar(async () => {
+      const aviso = `¿Eliminar la cuenta de ${u.nombre} (${u.email})?\n\nSe borrarán también sus libros y todos los movimientos que contienen. No se puede deshacer.`;
+      if (!confirm(aviso)) return;
+      const { eliminado } = await api(`/admin/usuarios/${u.id}`, { method: 'DELETE' });
+      avisar(`Cuenta de ${eliminado.nombre} eliminada (${eliminado.movimientos} movimientos borrados)`);
+      // Si compartía algún libro contigo, la lista de libros puede haber cambiado.
+      await cargarLibros();
+      render();
+    });
+
   return [
     h('div', { class: 'periodo' }, h('h2', { class: 'izquierda' }, 'Almacenamiento')),
 
@@ -774,17 +798,32 @@ async function vistaAdmin() {
       h('header', null, h('h3', null, 'Usuarios registrados'), h('span', { class: 'tenue' }, String(usuarios.length))),
       h('div', { class: 'tabla-scroll' },
         h('table', null,
-          h('thead', null, h('tr', null, h('th', null, 'Persona'), h('th', null, 'Registro'), h('th', { class: 'monto' }, 'Libros'))),
+          h('thead', null, h('tr', null, h('th', null, 'Persona'), h('th', { class: 'ocultar-movil' }, 'Registro'), h('th', { class: 'monto' }, 'Libros'), h('th', null))),
           h('tbody', null,
             usuarios.map((u) =>
               h('tr', null,
-                h('td', null, u.nombre, u.id === estado.usuario.id && ' (tú)', h('div', { class: 'tenue' }, u.email)),
-                h('td', null, u.registro),
+                h('td', null, u.nombre, u.id === estado.usuario.id && ' (tú)', h('div', { class: 'tenue correo' }, u.email)),
+                h('td', { class: 'ocultar-movil' }, u.registro),
                 h('td', { class: 'monto' }, String(u.libros)),
+                h('td', { class: 'acciones-fila' },
+                  u.id !== estado.usuario.id &&
+                    h('button', { type: 'button', class: 'mini peligro', onclick: () => eliminarUsuario(u) }, 'Eliminar'),
+                ),
               ),
             ),
           ),
         ),
+      ),
+    ),
+
+    h('section', { class: 'panel' },
+      h('header', null, h('h3', null, 'Añadir usuario')),
+      h('p', { class: 'tenue' }, 'Crea la cuenta y pásale el correo y la contraseña a la persona. Empezará con un libro «Personal» vacío.'),
+      h('form', { class: 'form-linea', onsubmit: crearUsuario },
+        h('label', null, 'Nombre', h('input', { name: 'nombre', maxLength: 60, required: true, autocomplete: 'off' })),
+        h('label', null, 'Correo', h('input', { name: 'email', type: 'email', required: true, autocomplete: 'off' })),
+        h('label', null, 'Contraseña', h('input', { name: 'password', type: 'password', minLength: 8, maxLength: 72, required: true, autocomplete: 'new-password' })),
+        h('button', { class: 'primario' }, 'Crear cuenta'),
       ),
     ),
   ];

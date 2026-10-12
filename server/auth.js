@@ -33,14 +33,35 @@ export async function requiereAdmin(req, res, next) {
   next();
 }
 
-export function requiereSesion(req, res, next) {
+export async function requiereSesion(req, res, next) {
+  let id;
   try {
-    const datos = jwt.verify(req.cookies[COOKIE] ?? '', config.jwtSecret);
-    req.usuario = { id: datos.id };
-    next();
+    id = jwt.verify(req.cookies[COOKIE] ?? '', config.jwtSecret).id;
   } catch {
-    res.status(401).json({ error: 'Inicia sesión para continuar' });
+    // Sin cookie o con una caducada o manipulada.
   }
+  // Se comprueba que la cuenta siga existiendo: así una cuenta eliminada pierde el acceso al momento.
+  if (!id || !(await Usuario.exists({ _id: id }))) {
+    return res.status(401).json({ error: 'Inicia sesión para continuar' });
+  }
+  req.usuario = { id };
+  next();
+}
+
+// Alta de una cuenta con su libro «Personal»; la usan el registro y el administrador.
+export async function crearUsuario(cuerpo) {
+  const nombre = texto(cuerpo.nombre, 'el nombre', 60);
+  const email = texto(cuerpo.email, 'el correo').toLowerCase();
+  const password = cuerpo.password;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ErrorHttp(400, 'El correo no es válido');
+  if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
+    throw new ErrorHttp(400, 'La contraseña debe tener entre 8 y 72 caracteres');
+  }
+  if (await Usuario.exists({ email })) throw new ErrorHttp(409, 'Ya existe una cuenta con ese correo');
+
+  const usuario = await Usuario.create({ nombre, email, passwordHash: await bcrypt.hash(password, 11) });
+  await Libro.create({ nombre: 'Personal', propietario: usuario._id });
+  return usuario;
 }
 
 const limite = rateLimit({
@@ -54,18 +75,7 @@ const limite = rateLimit({
 export const rutasAuth = Router();
 
 rutasAuth.post('/registro', limite, async (req, res) => {
-  const nombre = texto(req.body.nombre, 'el nombre', 60);
-  const email = texto(req.body.email, 'el correo').toLowerCase();
-  const password = req.body.password;
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ErrorHttp(400, 'El correo no es válido');
-  if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
-    throw new ErrorHttp(400, 'La contraseña debe tener entre 8 y 72 caracteres');
-  }
-  if (await Usuario.exists({ email })) throw new ErrorHttp(409, 'Ya existe una cuenta con ese correo');
-
-  const usuario = await Usuario.create({ nombre, email, passwordHash: await bcrypt.hash(password, 11) });
-  await Libro.create({ nombre: 'Personal', propietario: usuario._id });
-
+  const usuario = await crearUsuario(req.body);
   iniciarSesion(res, usuario);
   res.status(201).json({ usuario: await publico(usuario) });
 });

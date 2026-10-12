@@ -23,7 +23,7 @@ La conexión se configura en el archivo `.env` (copia `.env.example` como `.env`
 
 - **Libros:** cada cuenta empieza con un libro «Personal». Puedes crear más («Casa», «Viaje»…), cada uno con su moneda.
 - **Moneda:** el selector de la cabecera cambia la moneda del libro (soles por defecto, dólares o cualquier otra). Solo cambia el símbolo; no convierte los montos.
-- **Admin:** la primera cuenta registrada (o las de `ADMIN_EMAILS`) ve una pestaña «Admin» con el espacio usado y libre en MongoDB y la lista de usuarios.
+- **Admin:** la primera cuenta registrada (o las de `ADMIN_EMAILS`) ve una pestaña «Admin» con el espacio usado y libre en MongoDB y la lista de usuarios. Desde ahí puede crear cuentas y eliminarlas (al eliminar una cuenta se borran también sus libros y movimientos).
 - **Mes:** ingresos, gastos, balance y lo que falta por pagar; lista de pagos y cobros pendientes (vencidos y de los próximos 30 días) y previsión del mes siguiente.
 - **Repetir cada mes:** al crear un gasto o ingreso fijo (alquiler, salario…) elige durante cuántos meses se repite; así aparece en los meses futuros y en el total del año.
 - **Año:** totales anuales, gráfica mes a mes y reparto por categorías.

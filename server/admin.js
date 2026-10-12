@@ -2,6 +2,8 @@ import { Router } from 'express';
 import mongoose from 'mongoose';
 import { config } from './config.js';
 import { Usuario, Libro, Movimiento } from './models.js';
+import { crearUsuario } from './auth.js';
+import { ErrorHttp } from './errores.js';
 
 const BASES_DEL_SISTEMA = ['admin', 'local', 'config'];
 
@@ -42,8 +44,9 @@ rutasAdmin.get('/almacenamiento', async (req, res) => {
   const limite = config.almacenamientoMb * 1024 * 1024;
   const usado = bases.reduce((total, b) => total + b.bytes, 0);
   const libre = Math.max(0, limite - usado);
-  // Tamaño medio de un movimiento con sus índices; sin datos aún se usa una estimación prudente.
-  const porMovimiento = movimientos > 0 && statsMov ? (statsMov.size + statsMov.totalIndexSize) / movimientos : 400;
+  // Tamaño medio de un movimiento con sus índices. Con pocos datos la media engaña
+  // (los índices tienen un tamaño mínimo), así que hasta 1000 movimientos se usa un valor fijo prudente.
+  const porMovimiento = movimientos >= 1000 && statsMov ? (statsMov.size + statsMov.totalIndexSize) / movimientos : 400;
 
   res.json({
     limite,
@@ -55,6 +58,26 @@ rutasAdmin.get('/almacenamiento', async (req, res) => {
     bases: bases.sort((a, b) => b.bytes - a.bytes),
     totales: { usuarios, libros, movimientos },
   });
+});
+
+rutasAdmin.post('/usuarios', async (req, res) => {
+  const usuario = await crearUsuario(req.body);
+  res.status(201).json({ usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email } });
+});
+
+// Elimina la cuenta con sus libros y movimientos, y la quita de los libros que le compartieron.
+rutasAdmin.delete('/usuarios/:id', async (req, res) => {
+  const { id } = req.params;
+  if (id === req.usuario.id) throw new ErrorHttp(400, 'No puedes eliminar tu propia cuenta desde aquí');
+  const usuario = mongoose.isValidObjectId(id) ? await Usuario.findById(id) : null;
+  if (!usuario) throw new ErrorHttp(404, 'Usuario no encontrado');
+
+  const libros = await Libro.find({ propietario: usuario._id }).distinct('_id');
+  const { deletedCount: movimientos } = await Movimiento.deleteMany({ libro: { $in: libros } });
+  await Libro.deleteMany({ _id: { $in: libros } });
+  await Libro.updateMany({ 'miembros.usuario': usuario._id }, { $pull: { miembros: { usuario: usuario._id } } });
+  await usuario.deleteOne();
+  res.json({ eliminado: { nombre: usuario.nombre, libros: libros.length, movimientos } });
 });
 
 rutasAdmin.get('/usuarios', async (req, res) => {
