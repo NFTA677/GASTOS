@@ -116,9 +116,9 @@ rutasAdmin.post('/whatsapp/enviar', async (req, res) => {
 rutasAdmin.get('/ia', async (req, res) => res.json(await estadoIa()));
 
 rutasAdmin.put('/ia', async (req, res) => {
-  const { clave, modelo, activa, responderTodo } = req.body;
+  const { proveedor, clave, modelo, activa, responderTodo } = req.body;
   if (clave !== undefined && clave !== null && (typeof clave !== 'string' || clave.length > 300)) throw new ErrorHttp(400, 'Clave inválida');
-  res.json(await guardarIa({ clave, modelo, activa, responderTodo }));
+  res.json(await guardarIa({ proveedor, clave, modelo, activa, responderTodo }));
 });
 
 rutasAdmin.post('/ia/probar', async (req, res) => res.json(await probarIa()));

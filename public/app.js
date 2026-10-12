@@ -1048,14 +1048,19 @@ function pintarAdmin(datos) {
   if (w.estado === 'conectando' || w.estado === 'esperando_qr') vigilarWhatsapp();
 
   // ----- IA -----
+  // Proveedor que se está viendo en el formulario (al guardar pasa a ser el que usa el bot).
+  const proveedorVisto = datos.proveedorVisto ?? ia.proveedor;
+  const prov = ia.proveedores[proveedorVisto];
+
   const guardarIa = (ev) => {
     ev.preventDefault();
     const form = ev.target;
     intentar(async () => {
-      const body = { modelo: form.modelo.value, activa: form.activa.checked, responderTodo: form.responderTodo.checked };
+      const body = { proveedor: proveedorVisto, modelo: form.modelo.value, activa: form.activa.checked, responderTodo: form.responderTodo.checked };
       if (form.clave.value.trim()) body.clave = form.clave.value.trim();
       datos.ia = await api('/admin/ia', { method: 'PUT', body });
-      avisar('Ajustes de la IA guardados');
+      datos.proveedorVisto = null;
+      avisar(`Ajustes guardados. El bot usa ${datos.ia.proveedores[datos.ia.proveedor].nombre}.`);
       render(true);
     });
   };
@@ -1070,7 +1075,7 @@ function pintarAdmin(datos) {
   const quitarClave = () =>
     intentar(async () => {
       if (!confirm('¿Borrar la clave guardada? La IA dejará de responder.')) return;
-      datos.ia = await api('/admin/ia', { method: 'PUT', body: { clave: null, activa: false } });
+      datos.ia = await api('/admin/ia', { method: 'PUT', body: { proveedor: proveedorVisto, clave: null, activa: false } });
       render(true);
     });
 
@@ -1213,28 +1218,43 @@ function pintarAdmin(datos) {
       h('section', { class: 'panel' },
         h('header', null,
           h('h3', null, 'Inteligencia artificial'),
-          h('span', { class: ia.activa && ia.tieneClave ? 'chip ok' : 'chip' }, ia.activa && ia.tieneClave ? 'Activada' : 'Desactivada')),
+          h('span', { class: ia.disponible ? 'chip ok' : 'chip' }, ia.disponible ? `Activada · ${ia.proveedores[ia.proveedor].nombre}` : 'Desactivada')),
         h('p', null, 'Con la IA, los usuarios pueden preguntar al bot de WhatsApp con sus propias palabras, por ejemplo «ia ¿cuánto gasté en comida este mes?». La IA solo ve los datos del libro de quien pregunta y no puede modificar nada.'),
         h('form', { onsubmit: guardarIa },
-          h('label', null, 'Clave de la API de Claude',
+          h('label', null, 'Proveedor',
+            h('select', {
+              name: 'proveedor',
+              onchange: (ev) => {
+                datos.proveedorVisto = ev.target.value;
+                render(true);
+              },
+            }, Object.entries(ia.proveedores).map(([id, p]) => h('option', { value: id, selected: id === proveedorVisto }, p.nombre)))),
+          h('label', null, `Clave de la API de ${prov.nombre}`,
             h('input', {
               name: 'clave', type: 'password', autocomplete: 'off', maxLength: 300,
-              placeholder: ia.tieneClave ? `Guardada (termina en ${ia.finalClave}). Escribe otra para cambiarla.` : 'sk-ant-…',
-              disabled: ia.origenClave === 'entorno',
+              placeholder: prov.tieneClave ? `Guardada (termina en ${prov.finalClave}). Escribe otra para cambiarla.` : prov.ejemploClave,
+              disabled: prov.origenClave === 'entorno',
             })),
-          ia.origenClave === 'entorno' && h('p', { class: 'tenue' }, 'La clave viene de la variable ANTHROPIC_API_KEY del servidor; se cambia allí.'),
+          prov.origenClave === 'entorno' && h('p', { class: 'tenue' }, 'La clave viene de una variable de entorno del servidor; se cambia allí.'),
           h('label', null, 'Modelo',
-            h('select', { name: 'modelo' }, Object.entries(ia.modelos).map(([id, nombre]) => h('option', { value: id, selected: id === ia.modelo }, nombre)))),
+            h('select', { name: 'modelo' }, Object.entries(prov.modelos).map(([id, nombre]) => h('option', { value: id, selected: id === prov.modelo }, nombre)))),
+          proveedorVisto === 'nvidia' && h('p', { class: 'tenue nota-repetir' },
+            prov.tieneClave
+              ? 'La lista sale de tu cuenta de NVIDIA. No todos los modelos listados están habilitados: usa «Probar conexión» después de guardar.'
+              : 'Guarda la clave para ver todos los modelos de tu cuenta.'),
           h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'activa', checked: ia.activa }), 'Activar la IA en el bot de WhatsApp'),
           h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'responderTodo', checked: ia.responderTodo }),
             'Responder a cualquier mensaje de un usuario registrado, sin necesidad de empezar por «ia»'),
           h('div', { class: 'form-linea' },
             h('button', { class: 'primario' }, 'Guardar'),
-            h('button', { type: 'button', disabled: !ia.tieneClave, onclick: probarIa }, 'Probar conexión'),
-            ia.origenClave === 'panel' && h('button', { type: 'button', class: 'peligro', onclick: quitarClave }, 'Borrar clave'),
+            h('button', { type: 'button', disabled: !ia.proveedores[ia.proveedor].tieneClave, onclick: probarIa, title: 'Prueba el proveedor y el modelo guardados' }, 'Probar conexión'),
+            prov.origenClave === 'panel' && h('button', { type: 'button', class: 'peligro', onclick: quitarClave }, 'Borrar clave'),
           ),
         ),
-        h('p', { class: 'tenue pie-panel' }, 'La clave se crea en console.anthropic.com (API Keys) y su uso es de pago, según los mensajes que se procesen. Se guarda cifrada y nunca se muestra entera. Cada usuario tiene un límite de 40 preguntas a la IA por día.'),
+        h('p', { class: 'tenue pie-panel' }, proveedorVisto === 'nvidia'
+          ? 'La clave se crea en build.nvidia.com (API Keys) y empieza por «nvapi-». La cuenta gratuita incluye créditos limitados. Se guarda cifrada y nunca se muestra entera. Cada usuario tiene un límite de 40 preguntas a la IA por día.'
+          : 'La clave se crea en console.anthropic.com (API Keys) y su uso es de pago, según los mensajes que se procesen. Se guarda cifrada y nunca se muestra entera. Cada usuario tiene un límite de 40 preguntas a la IA por día.'),
+        h('p', { class: 'tenue' }, 'La IA puede equivocarse en alguna cuenta; los comandos (resumen, deudas…) siempre dan las cifras exactas.'),
         h('p', { class: 'tenue' }, 'No actives «responder a cualquier mensaje» si el bot usa tu número personal: contestaría a todo lo que te escriban los usuarios registrados.'),
       ),
   };

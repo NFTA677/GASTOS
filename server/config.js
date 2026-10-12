@@ -41,5 +41,7 @@ export const config = {
   zona: process.env.ZONA_HORARIA?.trim() || 'America/Lima',
   // Clave de la API de Claude. Si no está aquí, el administrador puede guardarla desde el panel.
   claveIa: process.env.ANTHROPIC_API_KEY?.trim() || '',
+  // Clave de la API de NVIDIA (build.nvidia.com), la alternativa a Claude para la IA del bot.
+  claveNvidia: process.env.NVIDIA_API_KEY?.trim() || '',
   produccion: process.env.NODE_ENV === 'production',
 };

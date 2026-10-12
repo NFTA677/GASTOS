@@ -1,5 +1,5 @@
 // Cambia la versión al publicar cambios para que se descarte la caché anterior.
-const CACHE = 'nfta-gastos-v7';
+const CACHE = 'nfta-gastos-v8';
 const ARCHIVOS = ['/', '/styles.css', '/app.js', '/tema.js', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (ev) => {

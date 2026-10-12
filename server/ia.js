@@ -3,18 +3,38 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from './config.js';
 import { Ajuste } from './models.js';
 
-export const MODELOS = {
+const MAX_PREGUNTAS_DIA = 40;
+const TURNOS_RECORDADOS = 6;
+
+// ---------- proveedores ----------
+
+const MODELOS_CLAUDE = {
   'claude-opus-5-5': 'Claude Opus 5.5 (el más capaz)',
   'claude-sonnet-5-5': 'Claude Sonnet 5.5 (equilibrado)',
   'claude-haiku-5-5': 'Claude Haiku 5.5 (el más económico)',
 };
-const MODELO_POR_DEFECTO = 'claude-opus-5-5';
-// Modelos que admiten el modelo de respaldo automático cuando el principal declina responder.
-const CON_RESPALDO = ['claude-opus-5-5', 'claude-sonnet-5-5'];
-const MAX_PREGUNTAS_DIA = 40;
-const TURNOS_RECORDADOS = 6;
+// Modelos de Claude que admiten el modelo de respaldo automático cuando el principal declina responder.
+const CLAUDE_CON_RESPALDO = ['claude-opus-5-5', 'claude-sonnet-5-5'];
 
-// ---------- ajustes (la clave se guarda cifrada con una llave derivada de JWT_SECRET) ----------
+const NVIDIA_URL = 'https://integrate.api.nvidia.com/v1';
+// Modelos comprobados; se usan si no se puede leer la lista de la cuenta.
+const MODELOS_NVIDIA_BASE = ['nvidia/nemotron-3-super-120b-a12b', 'nvidia/nemotron-3.5-lightning-30b-a3b', 'moonshotai/kimi-k3'];
+// La lista de NVIDIA mezcla modelos de chat con otros (búsqueda, voz, imagen, moderación) que no sirven aquí.
+const NO_ES_CHAT = /embed|rerank|guard|safety|parse|ocr|vlm|vision|clip|whisper|parakeet|canary|tts|asr|riva|reward|detect|retriev|bge|arctic|e5-|nv-|coder|starcoder|codegemma|codellama|fuyu|neva|kosmos|deplot|paligemma|sdxl|stable|flux|cosmos|usdcode|translate/i;
+
+const PROVEEDORES = {
+  claude: { nombre: 'Claude (Anthropic)', campoClave: 'clave', campoModelo: 'modelo', claveEntorno: () => config.claveIa, modeloInicial: 'claude-opus-5-5', ejemploClave: 'sk-ant-…' },
+  nvidia: { nombre: 'NVIDIA', campoClave: 'claveNvidia', campoModelo: 'modeloNvidia', claveEntorno: () => config.claveNvidia, modeloInicial: MODELOS_NVIDIA_BASE[0], ejemploClave: 'nvapi-…' },
+};
+
+class ErrorNvidia extends Error {
+  constructor(estado, detalle) {
+    super(detalle);
+    this.estado = estado;
+  }
+}
+
+// ---------- ajustes (las claves se guardan cifradas con una llave derivada de JWT_SECRET) ----------
 
 const llave = () => createHash('sha256').update(`ia:${config.jwtSecret}`).digest();
 
@@ -37,49 +57,153 @@ function descifrar(valor) {
   }
 }
 
+const guardadoIa = async () => (await Ajuste.findById('ia'))?.valor ?? {};
+
+// Clave y modelo de un proveedor. La variable de entorno manda sobre lo guardado en el panel.
+function deProveedor(guardado, id) {
+  const p = PROVEEDORES[id];
+  const clavePanel = guardado[p.campoClave] ? descifrar(guardado[p.campoClave]) : '';
+  const claveEntorno = p.claveEntorno();
+  return {
+    clave: claveEntorno || clavePanel,
+    origenClave: claveEntorno ? 'entorno' : clavePanel ? 'panel' : null,
+    modelo: typeof guardado[p.campoModelo] === 'string' && guardado[p.campoModelo] ? guardado[p.campoModelo] : p.modeloInicial,
+  };
+}
+
 async function leerAjustes() {
-  const guardado = (await Ajuste.findById('ia'))?.valor ?? {};
-  const clavePanel = guardado.clave ? descifrar(guardado.clave) : '';
-  return {
-    activa: guardado.activa === true,
-    responderTodo: guardado.responderTodo === true,
-    modelo: Object.hasOwn(MODELOS, guardado.modelo) ? guardado.modelo : MODELO_POR_DEFECTO,
-    // La variable de entorno manda sobre lo guardado en el panel.
-    clave: config.claveIa || clavePanel,
-    origenClave: config.claveIa ? 'entorno' : clavePanel ? 'panel' : null,
-  };
+  const guardado = await guardadoIa();
+  const proveedor = Object.hasOwn(PROVEEDORES, guardado.proveedor) ? guardado.proveedor : 'claude';
+  return { proveedor, activa: guardado.activa === true, responderTodo: guardado.responderTodo === true, ...deProveedor(guardado, proveedor) };
 }
 
-// Lo que ve el administrador: nunca la clave, solo si existe y sus últimos caracteres.
+// Modelos de chat que la cuenta de NVIDIA tiene a la vista (se consulta como mucho una vez por hora).
+let cacheNvidia = { clave: '', hasta: 0, modelos: MODELOS_NVIDIA_BASE };
+async function modelosNvidia(clave) {
+  if (!clave) return MODELOS_NVIDIA_BASE;
+  if (cacheNvidia.clave === clave && Date.now() < cacheNvidia.hasta) return cacheNvidia.modelos;
+  try {
+    const res = await fetch(`${NVIDIA_URL}/models`, { headers: { Authorization: `Bearer ${clave}` }, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new ErrorNvidia(res.status, 'No se pudo leer la lista de modelos');
+    const ids = (await res.json()).data.map((m) => m.id).filter((id) => !NO_ES_CHAT.test(id)).sort();
+    const modelos = [...MODELOS_NVIDIA_BASE.filter((id) => ids.includes(id)), ...ids.filter((id) => !MODELOS_NVIDIA_BASE.includes(id))];
+    cacheNvidia = { clave, hasta: Date.now() + 60 * 60 * 1000, modelos: modelos.length ? modelos : MODELOS_NVIDIA_BASE };
+  } catch {
+    return MODELOS_NVIDIA_BASE;
+  }
+  return cacheNvidia.modelos;
+}
+
+// Lo que ve el administrador: nunca las claves, solo si existen y sus últimos caracteres.
 export async function estadoIa() {
-  const a = await leerAjustes();
-  return {
-    activa: a.activa,
-    responderTodo: a.responderTodo,
-    modelo: a.modelo,
-    modelos: MODELOS,
-    tieneClave: Boolean(a.clave),
-    origenClave: a.origenClave,
-    finalClave: a.clave ? a.clave.slice(-4) : '',
-  };
+  const guardado = await guardadoIa();
+  const ajustes = await leerAjustes();
+  const proveedores = {};
+  for (const [id, p] of Object.entries(PROVEEDORES)) {
+    const datos = deProveedor(guardado, id);
+    const lista = id === 'claude' ? MODELOS_CLAUDE : Object.fromEntries((await modelosNvidia(datos.clave)).map((m) => [m, m]));
+    proveedores[id] = {
+      nombre: p.nombre,
+      ejemploClave: p.ejemploClave,
+      tieneClave: Boolean(datos.clave),
+      origenClave: datos.origenClave,
+      finalClave: datos.clave ? datos.clave.slice(-4) : '',
+      modelo: datos.modelo,
+      // El modelo guardado se muestra aunque ya no esté en la lista, para no cambiarlo sin avisar.
+      modelos: Object.hasOwn(lista, datos.modelo) ? lista : { [datos.modelo]: datos.modelo, ...lista },
+    };
+  }
+  return { proveedor: ajustes.proveedor, activa: ajustes.activa, responderTodo: ajustes.responderTodo, disponible: ajustes.activa && Boolean(ajustes.clave), proveedores };
 }
 
-export async function guardarIa({ clave, modelo, activa, responderTodo }) {
-  const actual = (await Ajuste.findById('ia'))?.valor ?? {};
-  const nuevo = { ...actual };
-  if (typeof clave === 'string' && clave.trim()) nuevo.clave = cifrar(clave.trim());
-  if (clave === null) delete nuevo.clave;
-  if (Object.hasOwn(MODELOS, modelo)) nuevo.modelo = modelo;
+// «clave» y «modelo» se aplican al proveedor indicado, que además pasa a ser el que usa el bot.
+export async function guardarIa({ proveedor, clave, modelo, activa, responderTodo }) {
+  const nuevo = { ...(await guardadoIa()) };
+  const id = Object.hasOwn(PROVEEDORES, proveedor) ? proveedor : Object.hasOwn(PROVEEDORES, nuevo.proveedor) ? nuevo.proveedor : 'claude';
+  const p = PROVEEDORES[id];
+  nuevo.proveedor = id;
+  if (typeof clave === 'string' && clave.trim()) nuevo[p.campoClave] = cifrar(clave.trim());
+  if (clave === null) delete nuevo[p.campoClave];
+  if (typeof modelo === 'string' && /^[\w./:-]{3,100}$/.test(modelo)) nuevo[p.campoModelo] = modelo;
   if (typeof activa === 'boolean') nuevo.activa = activa;
   if (typeof responderTodo === 'boolean') nuevo.responderTodo = responderTodo;
   await Ajuste.findByIdAndUpdate('ia', { valor: nuevo }, { upsert: true });
   return estadoIa();
 }
 
-// La IA está disponible para el bot solo si está activada y hay clave.
+// La IA está disponible para el bot solo si está activada y el proveedor elegido tiene clave.
 export async function iaDisponible() {
   const a = await leerAjustes();
   return { disponible: a.activa && Boolean(a.clave), responderTodo: a.responderTodo };
+}
+
+// ---------- llamadas a los modelos ----------
+
+async function pedirAClaude(ajustes, { system, messages }) {
+  const cliente = new Anthropic({ apiKey: ajustes.clave, maxRetries: 1, timeout: 60_000 });
+  const base = { model: ajustes.modelo, max_tokens: 16000, output_config: { effort: 'low' }, messages, ...(system && { system }) };
+  // Con respaldo, si el modelo declina por sus filtros de seguridad, la API reintenta sola con otro modelo.
+  const respuesta = CLAUDE_CON_RESPALDO.includes(ajustes.modelo)
+    ? await cliente.beta.messages.create({ ...base, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' })
+    : await cliente.messages.create(base);
+  if (respuesta.stop_reason === 'refusal') return { rechazo: true, texto: '' };
+  return { texto: respuesta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n') };
+}
+
+// La API de NVIDIA sigue el formato de «chat completions»: las instrucciones van como primer mensaje.
+async function pedirANvidia(ajustes, { system, messages }) {
+  let res;
+  try {
+    res = await fetch(`${NVIDIA_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ajustes.clave}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: ajustes.modelo,
+        max_tokens: 4096,
+        temperature: 0.2,
+        messages: [...(system ? [{ role: 'system', content: system }] : []), ...messages],
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    throw new ErrorNvidia(0, err.name === 'TimeoutError' ? 'tiempo agotado' : err.message);
+  }
+  const cuerpo = await res.json().catch(() => null);
+  if (!res.ok) throw new ErrorNvidia(res.status, cuerpo?.detail ?? cuerpo?.error?.message ?? cuerpo?.title ?? '');
+  return { texto: cuerpo?.choices?.[0]?.message?.content ?? '' };
+}
+
+const pedir = (ajustes, parametros) => (ajustes.proveedor === 'nvidia' ? pedirANvidia : pedirAClaude)(ajustes, parametros);
+
+// Adapta la salida a WhatsApp: sin el razonamiento interno de algunos modelos y con su formato de negrita.
+function paraWhatsapp(texto) {
+  return texto
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/\*\*(.+?)\*\*/g, '*$1*')
+    .replace(/^#{1,6}\s*(.+)$/gm, '*$1*')
+    .replace(/^(\s*)[-–]\s+/gm, '$1• ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Convierte los errores de los proveedores en un mensaje entendible para el administrador.
+export function explicarError(err) {
+  if (err instanceof ErrorNvidia) {
+    if (err.estado === 401 || err.estado === 403) return 'La clave de NVIDIA no es válida o no tiene permiso.';
+    if (err.estado === 404) return 'Ese modelo de NVIDIA no está disponible para tu cuenta. Elige otro de la lista.';
+    if (err.estado === 402) return 'La cuenta de NVIDIA se quedó sin créditos.';
+    if (err.estado === 429) return 'Se alcanzó el límite de uso de NVIDIA. Prueba más tarde.';
+    if (err.estado === 0) return `No se pudo conectar con NVIDIA (${err.message}).`;
+    return `Error de NVIDIA (${err.estado})${err.message ? `: ${err.message}` : ''}.`;
+  }
+  if (err instanceof Anthropic.AuthenticationError) return 'La clave de la API no es válida.';
+  if (err instanceof Anthropic.PermissionDeniedError) return 'La clave no tiene permiso para usar ese modelo.';
+  if (err instanceof Anthropic.NotFoundError) return 'El modelo elegido no está disponible para esta clave.';
+  if (err instanceof Anthropic.RateLimitError) return 'Se alcanzó el límite de uso de la API. Prueba más tarde.';
+  if (err instanceof Anthropic.BadRequestError) return `La API rechazó la petición: ${err.message}`;
+  if (err instanceof Anthropic.APIConnectionError) return 'No se pudo conectar con la API de Claude.';
+  if (err instanceof Anthropic.APIError) return `Error de la API (${err.status}).`;
+  return 'Error inesperado al consultar la IA.';
 }
 
 // ---------- conversación ----------
@@ -88,8 +212,10 @@ const INSTRUCCIONES = `Eres el asistente de «N.F.T.A Gastos», una app de finan
 
 Reglas:
 - Responde solo con la información del bloque <datos>, que contiene las finanzas reales del usuario. Si algo no está en los datos, dilo con claridad en lugar de suponerlo.
-- Haz tú las cuentas (sumas por categoría, comparaciones, cuánto falta por pagar) y da las cifras con la moneda del libro.
-- Escribe en español, breve y directo: es un chat de WhatsApp. Usa *negrita* de WhatsApp para las cifras importantes y listas con «•» cuando enumeres. No uses tablas ni encabezados con #.
+- Usa los totales ya calculados siempre que sirvan, sin recalcularlos. En cada bloque «totales»: «gastos» e «ingresos» son el total del periodo (lo ya pagado más lo pendiente), «gastosPendientes» es la parte de los gastos que falta por pagar (ya está incluida en «gastos», no la restes otra vez), «ingresosPendientes» es lo que falta por cobrar y «balance» es ingresos menos gastos.
+- Cuando tengas que sumar tú (por ejemplo, por categoría), suma solo los movimientos que correspondan y repasa la cuenta.
+- Da las cifras con la moneda del libro.
+- Escribe en español, breve y directo: es un chat de WhatsApp. Para resaltar usa un solo asterisco a cada lado (*así*) y listas con «•». No uses tablas, ni encabezados con #, ni doble asterisco.
 - No puedes crear, editar ni marcar movimientos; si te lo piden, indica que se hace desde la app.
 - Si la pregunta no tiene que ver con las finanzas del usuario, dilo amablemente y recuerda que puede escribir «menu».`;
 
@@ -105,29 +231,6 @@ function dentroDelLimite(usuarioId, hoy) {
   }
   uso.veces += 1;
   return uso.veces <= MAX_PREGUNTAS_DIA;
-}
-
-async function pedir(ajustes, parametros) {
-  const cliente = new Anthropic({ apiKey: ajustes.clave, maxRetries: 1, timeout: 60_000 });
-  const base = { model: ajustes.modelo, max_tokens: 16000, output_config: { effort: 'low' }, ...parametros };
-  // Con respaldo, si el modelo declina por sus filtros de seguridad, la API reintenta sola con otro modelo.
-  return CON_RESPALDO.includes(ajustes.modelo)
-    ? cliente.beta.messages.create({ ...base, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' })
-    : cliente.messages.create(base);
-}
-
-const textoDe = (respuesta) => respuesta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-
-// Convierte los errores de la API en un mensaje entendible para el administrador.
-export function explicarError(err) {
-  if (err instanceof Anthropic.AuthenticationError) return 'La clave de la API no es válida.';
-  if (err instanceof Anthropic.PermissionDeniedError) return 'La clave no tiene permiso para usar ese modelo.';
-  if (err instanceof Anthropic.NotFoundError) return 'El modelo elegido no está disponible para esta clave.';
-  if (err instanceof Anthropic.RateLimitError) return 'Se alcanzó el límite de uso de la API. Prueba más tarde.';
-  if (err instanceof Anthropic.BadRequestError) return `La API rechazó la petición: ${err.message}`;
-  if (err instanceof Anthropic.APIConnectionError) return 'No se pudo conectar con la API de Claude.';
-  if (err instanceof Anthropic.APIError) return `Error de la API (${err.status}).`;
-  return 'Error inesperado al consultar la IA.';
 }
 
 /**
@@ -153,9 +256,9 @@ export async function preguntar(usuario, contexto, pregunta) {
     console.error('IA:', explicarError(err), err.message);
     return 'Ahora mismo no puedo consultar la IA. Escribe *menu* para usar los comandos.';
   }
-  if (respuesta.stop_reason === 'refusal') return 'No puedo ayudarte con esa pregunta. Escribe *menu* para ver lo que sí puedo hacer.';
+  if (respuesta.rechazo) return 'No puedo ayudarte con esa pregunta. Escribe *menu* para ver lo que sí puedo hacer.';
 
-  const texto = textoDe(respuesta);
+  const texto = paraWhatsapp(respuesta.texto);
   if (!texto) return 'No he podido preparar una respuesta. Prueba a preguntarlo de otra forma.';
   // En el historial se guarda la pregunta sin los datos, para no acumularlos en cada turno.
   historiales.set(usuario.id, [...historial, { role: 'user', content: pregunta }, { role: 'assistant', content: texto }].slice(-TURNOS_RECORDADOS * 2));
@@ -165,10 +268,11 @@ export async function preguntar(usuario, contexto, pregunta) {
 // Prueba de la configuración desde el panel: una pregunta mínima para comprobar clave y modelo.
 export async function probarIa() {
   const ajustes = await leerAjustes();
-  if (!ajustes.clave) return { ok: false, mensaje: 'Falta la clave de la API.' };
+  const proveedor = PROVEEDORES[ajustes.proveedor].nombre;
+  if (!ajustes.clave) return { ok: false, mensaje: `Falta la clave de ${proveedor}.` };
   try {
     const respuesta = await pedir(ajustes, { messages: [{ role: 'user', content: 'Responde solo con la palabra: funciona' }] });
-    return { ok: true, mensaje: `Conexión correcta con ${MODELOS[ajustes.modelo]}. Respuesta: «${textoDe(respuesta).slice(0, 80)}»` };
+    return { ok: true, mensaje: `Conexión correcta con ${proveedor} (${ajustes.modelo}). Respuesta: «${paraWhatsapp(respuesta.texto).slice(0, 80)}»` };
   } catch (err) {
     return { ok: false, mensaje: explicarError(err) };
   }
