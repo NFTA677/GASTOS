@@ -4,6 +4,8 @@ import { config } from './config.js';
 import { Usuario, Libro, Movimiento } from './models.js';
 import { crearUsuario } from './auth.js';
 import { ErrorHttp } from './errores.js';
+import { wa, conectarWhatsapp, desconectarWhatsapp, enviarEstadoDeCuenta } from './whatsapp.js';
+import { estadoIa, guardarIa, probarIa } from './ia.js';
 
 const BASES_DEL_SISTEMA = ['admin', 'local', 'config'];
 
@@ -65,6 +67,62 @@ rutasAdmin.post('/usuarios', async (req, res) => {
   res.status(201).json({ usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email } });
 });
 
+// ---------- bot de WhatsApp ----------
+
+const estadoWhatsapp = async () => ({ ...wa, conNumero: await Usuario.countDocuments({ whatsapp: { $exists: true } }) });
+
+rutasAdmin.get('/whatsapp', async (req, res) => res.json(await estadoWhatsapp()));
+
+rutasAdmin.post('/whatsapp/conectar', async (req, res) => {
+  await conectarWhatsapp();
+  res.json(await estadoWhatsapp());
+});
+
+rutasAdmin.post('/whatsapp/desconectar', async (req, res) => {
+  await desconectarWhatsapp();
+  res.json(await estadoWhatsapp());
+});
+
+// Envía el estado de cuenta a un usuario (usuarioId) o a todos los que tienen número («todos»).
+rutasAdmin.post('/whatsapp/enviar', async (req, res) => {
+  if (wa.estado !== 'conectado') throw new ErrorHttp(409, 'WhatsApp no está conectado');
+  const { usuarioId } = req.body;
+  let destinatarios;
+  if (usuarioId === 'todos') {
+    destinatarios = await Usuario.find({ whatsapp: { $exists: true } }).limit(200);
+  } else {
+    const usuario = mongoose.isValidObjectId(usuarioId) ? await Usuario.findById(usuarioId) : null;
+    if (!usuario) throw new ErrorHttp(404, 'Usuario no encontrado');
+    destinatarios = [usuario];
+  }
+
+  const fallos = [];
+  let enviados = 0;
+  for (const [i, usuario] of destinatarios.entries()) {
+    // Una pausa entre envíos: mandar muchos mensajes seguidos es lo que más bloqueos provoca.
+    if (i > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+    try {
+      await enviarEstadoDeCuenta(usuario);
+      enviados += 1;
+    } catch (err) {
+      fallos.push(err.message);
+    }
+  }
+  res.json({ enviados, fallos });
+});
+
+// ---------- inteligencia artificial ----------
+
+rutasAdmin.get('/ia', async (req, res) => res.json(await estadoIa()));
+
+rutasAdmin.put('/ia', async (req, res) => {
+  const { clave, modelo, activa, responderTodo } = req.body;
+  if (clave !== undefined && clave !== null && (typeof clave !== 'string' || clave.length > 300)) throw new ErrorHttp(400, 'Clave inválida');
+  res.json(await guardarIa({ clave, modelo, activa, responderTodo }));
+});
+
+rutasAdmin.post('/ia/probar', async (req, res) => res.json(await probarIa()));
+
 // Elimina la cuenta con sus libros y movimientos, y la quita de los libros que le compartieron.
 rutasAdmin.delete('/usuarios/:id', async (req, res) => {
   const { id } = req.params;
@@ -82,7 +140,7 @@ rutasAdmin.delete('/usuarios/:id', async (req, res) => {
 
 rutasAdmin.get('/usuarios', async (req, res) => {
   const [usuarios, librosPorUsuario] = await Promise.all([
-    Usuario.find().sort({ createdAt: 1 }).select('nombre email createdAt').limit(500),
+    Usuario.find().sort({ createdAt: 1 }).select('nombre email whatsapp createdAt').limit(500),
     Libro.aggregate([{ $group: { _id: '$propietario', total: { $sum: 1 } } }]),
   ]);
   const libros = new Map(librosPorUsuario.map((l) => [String(l._id), l.total]));
@@ -91,6 +149,7 @@ rutasAdmin.get('/usuarios', async (req, res) => {
       id: u.id,
       nombre: u.nombre,
       email: u.email,
+      whatsapp: u.whatsapp ?? '',
       registro: u.createdAt.toISOString().slice(0, 10),
       libros: libros.get(u.id) ?? 0,
     })),

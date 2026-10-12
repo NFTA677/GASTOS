@@ -37,5 +37,9 @@ export const config = {
   adminEmails: (process.env.ADMIN_EMAILS || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
   // Espacio contratado en MongoDB; 512 MB es el plan gratuito de Atlas.
   almacenamientoMb: Number(process.env.ALMACENAMIENTO_MB) || 512,
+  // Zona horaria para decidir qué día es «hoy» en los informes del bot.
+  zona: process.env.ZONA_HORARIA?.trim() || 'America/Lima',
+  // Clave de la API de Claude. Si no está aquí, el administrador puede guardarla desde el panel.
+  claveIa: process.env.ANTHROPIC_API_KEY?.trim() || '',
   produccion: process.env.NODE_ENV === 'production',
 };

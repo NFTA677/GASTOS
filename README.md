@@ -34,6 +34,15 @@ La conexión se configura en el archivo `.env` (copia `.env.example` como `.env`
 - **Año:** totales anuales, gráfica mes a mes y reparto por categorías.
 - **Compartir:** el propietario de un libro invita a otra persona por su correo (debe estar registrada) con acceso de «solo ver» o «puede editar».
 
+## Bot de WhatsApp e IA
+
+- **WhatsApp de cada usuario:** se pide al registrarse (con código de país) y se cambia en «Mi cuenta». El bot reconoce a cada persona por ese número.
+- **Vincular el bot:** en Admin → WhatsApp, «Conectar y mostrar código QR», y se escanea desde WhatsApp → Dispositivos vinculados. La sesión se guarda en MongoDB, así que sobrevive a reinicios y despliegues.
+- **Qué responde:** `resumen`, `deudas`, `proximo`, `año`, `pdf` (también «pdf pasado» / «pdf siguiente»), `libros` y `menu`. Solo contesta a números registrados en la app; ignora grupos y al resto de contactos.
+- **Envíos:** el administrador puede enviar el estado de cuenta a un usuario o a todos desde el panel.
+- **IA (opcional):** en Admin → IA se guarda una clave de la API de Claude y se activa. Entonces el bot responde preguntas libres que empiecen por «ia». La IA solo recibe los datos del libro de quien pregunta y no puede modificar nada.
+- **Limitaciones:** se usa WhatsApp Web de forma no oficial (librería Baileys); WhatsApp puede bloquear el número si detecta automatización, por lo que conviene un número dedicado. El bot solo funciona mientras el servidor está despierto: en el plan gratuito de Render hay que mantenerlo activo con un monitor o pasar a un plan de pago. No arranques la app en tu equipo contra la misma base de datos mientras el bot esté vinculado en el servidor: las dos copias se disputarían la sesión.
+
 ## Publicarla en Render
 
 1. Sube el proyecto a GitHub.

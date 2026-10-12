@@ -359,6 +359,28 @@ dialog h2 { margin-bottom: 1rem; }
   box-shadow: 0 6px 24px rgb(0 0 0 / 50%);
 }
 
+/* Vinculación de WhatsApp y textos de ayuda del administrador. */
+.zona-qr { display: flex; flex-wrap: wrap; align-items: center; gap: 1.25rem; }
+.zona-qr img { max-width: 100%; height: auto; border: 1px solid var(--linea); border-radius: 12px; }
+.zona-qr ol { flex: 1 1 240px; margin: 0; padding-left: 1.2rem; }
+.zona-qr li, .ayuda li { margin-bottom: .35rem; }
+.ayuda { margin: 0 0 .75rem; padding-left: 1.1rem; }
+/* Los formularios de una columna no se estiran a todo el ancho en pantallas grandes. */
+.panel > form:not(.form-linea) { max-width: 640px; }
+.auth-caja .panel { max-width: none; }
+
+/* ---------- Pantallas grandes: las ventanas emergentes crecen con la resolución ---------- */
+@media (min-width: 1200px) {
+  dialog:not(.cajon) { width: 580px; padding: 1.75rem; font-size: 1.03rem; }
+}
+@media (min-width: 1700px) {
+  dialog:not(.cajon) { width: 720px; padding: 2.25rem; font-size: 1.12rem; }
+  dialog:not(.cajon) h2 { font-size: 1.5rem; }
+  dialog:not(.cajon) :is(input, select) { min-height: 52px; }
+  dialog:not(.cajon) :is(button, .segmento label) { min-height: 48px; }
+  dialog:not(.cajon) input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; }
+}
+
 /* ---------- Tableta ---------- */
 @media (max-width: 900px) {
   .tarjetas { grid-template-columns: repeat(2, minmax(0, 1fr)); }

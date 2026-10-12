@@ -29,6 +29,9 @@
         <label>Correo
           <input name="email" type="email" autocomplete="email" required>
         </label>
+        <label id="campo-whatsapp" hidden>WhatsApp (con código de país)
+          <input name="whatsapp" type="tel" inputmode="tel" autocomplete="tel" maxlength="24" placeholder="51 987 654 321">
+        </label>
         <label>Contraseña
           <input name="password" type="password" minlength="8" maxlength="72" required>
         </label>
@@ -69,6 +72,7 @@
       <button type="button" data-vista="anio">Año</button>
       <button type="button" data-vista="informe">Informe PDF</button>
       <button type="button" data-vista="compartir">Compartir</button>
+      <button type="button" data-vista="cuenta">Mi cuenta</button>
       <button type="button" data-vista="admin" id="pestana-admin" hidden>Admin</button>
     </nav>
 
@@ -115,13 +119,18 @@
         <label>Repetir
           <select name="repetir">
             <option value="no">No repetir</option>
+            <option value="dia">Cada día</option>
             <option value="semana">Cada semana</option>
             <option value="quincena">Cada 2 semanas</option>
             <option value="mes">Cada mes</option>
+            <option value="bimestre">Cada 2 meses</option>
+            <option value="trimestre">Cada 3 meses</option>
+            <option value="semestre">Cada 6 meses</option>
+            <option value="anio">Cada año</option>
           </select>
         </label>
         <label id="campo-veces" hidden>Cuántas veces más
-          <input name="veces" type="number" min="1" max="104" step="1" value="11" inputmode="numeric">
+          <input name="veces" type="number" min="1" max="366" step="1" value="11" inputmode="numeric">
         </label>
       </div>
       <p class="tenue nota-repetir" id="nota-repetir" hidden></p>

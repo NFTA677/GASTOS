@@ -8,9 +8,14 @@ const usuarioSchema = new Schema(
     nombre: { type: String, required: true, trim: true, maxlength: 60 },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true, maxlength: 120 },
     passwordHash: { type: String, required: true },
+    // Solo dígitos con código de país (51987654321). El bot lo usa para saber quién escribe y a quién enviar.
+    whatsapp: { type: String, match: /^\d{10,15}$/ },
+    // Libro sobre el que responde el bot; si falta, el primero del usuario.
+    libroBot: { type: ObjectId, ref: 'Libro' },
   },
   { timestamps: true },
 );
+usuarioSchema.index({ whatsapp: 1 }, { unique: true, sparse: true });
 
 // Un "libro" agrupa movimientos. Cada usuario tiene los suyos y puede compartirlos.
 const libroSchema = new Schema(
@@ -50,6 +55,14 @@ const movimientoSchema = new Schema(
 movimientoSchema.index({ libro: 1, fecha: 1 });
 movimientoSchema.index({ libro: 1, serie: 1 });
 
+// Ajustes del administrador (IA, bot), uno por clave.
+const ajusteSchema = new Schema({ _id: String, valor: Schema.Types.Mixed }, { timestamps: true });
+
+// Sesión de WhatsApp (credenciales y claves de cifrado), para no tener que escanear el QR en cada reinicio.
+const sesionWaSchema = new Schema({ _id: String, datos: String });
+
+export const Ajuste = model('Ajuste', ajusteSchema);
+export const SesionWa = model('SesionWa', sesionWaSchema);
 export const Usuario = model('Usuario', usuarioSchema);
 export const Libro = model('Libro', libroSchema);
 export const Movimiento = model('Movimiento', movimientoSchema);

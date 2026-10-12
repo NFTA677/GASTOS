@@ -4,7 +4,7 @@ import { Usuario, Libro, Movimiento } from './models.js';
 import { ErrorHttp, texto } from './errores.js';
 import { generarInforme } from './informe.js';
 
-const MAX_REPETICIONES = 104;
+const MAX_REPETICIONES = 366;
 const redondear = (n) => Math.round(n * 100) / 100;
 
 // ---------- utilidades de fechas (todo en UTC, formato AAAA-MM-DD) ----------
@@ -34,12 +34,17 @@ function sumarDias(fecha, n) {
 
 // Fecha de la repetición número i según la frecuencia elegida.
 const SALTOS = {
+  dia: (fecha, i) => sumarDias(fecha, i),
   semana: (fecha, i) => sumarDias(fecha, 7 * i),
   quincena: (fecha, i) => sumarDias(fecha, 14 * i),
   mes: sumarMeses,
+  bimestre: (fecha, i) => sumarMeses(fecha, 2 * i),
+  trimestre: (fecha, i) => sumarMeses(fecha, 3 * i),
+  semestre: (fecha, i) => sumarMeses(fecha, 6 * i),
+  anio: (fecha, i) => sumarMeses(fecha, 12 * i),
 };
 
-// Lee { repetir: 'semana' | 'quincena' | 'mes', veces } del cuerpo; null si no se pide repetir.
+// Lee { repetir: una clave de SALTOS, veces } del cuerpo; null si no se pide repetir.
 function leerRepeticion(cuerpo) {
   let cada = cuerpo.repetir;
   let veces = Number(cuerpo.veces);

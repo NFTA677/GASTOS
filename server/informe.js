@@ -24,7 +24,7 @@ const limpio = (valor) =>
     .replace(/ {2,}/g, ' ')
     .trim();
 
-function formateador(moneda) {
+export function formateador(moneda) {
   const crear = (currencyDisplay) => new Intl.NumberFormat('es-PE', { style: 'currency', currency: moneda, currencyDisplay });
   let formato;
   try {

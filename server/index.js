@@ -9,6 +9,7 @@ import { rutasAuth, requiereSesion, requiereAdmin } from './auth.js';
 import { rutasAdmin } from './admin.js';
 import { rutasApi } from './routes.js';
 import { manejarErrores } from './errores.js';
+import { reanudarWhatsapp, pararWhatsapp } from './whatsapp.js';
 
 const publico = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -37,14 +38,19 @@ app.use(manejarErrores);
 const servidor = app.listen(config.puerto, () => {
   console.log(`Registro de gastos escuchando en http://localhost:${config.puerto}`);
 });
-conectar().catch((err) => {
-  estadoBd.causa = 'No se pudo iniciar la base de datos local.';
-  console.error('No se pudo iniciar MongoDB:', err.message);
-});
+conectar()
+  .catch((err) => {
+    estadoBd.causa = 'No se pudo iniciar la base de datos local.';
+    console.error('No se pudo iniciar MongoDB:', err.message);
+  })
+  // Si el bot de WhatsApp ya estaba vinculado, se reconecta solo con la sesión guardada.
+  .then(() => estadoBd.lista && reanudarWhatsapp())
+  .catch((err) => console.error('No se pudo reanudar WhatsApp:', err.message));
 
 for (const senal of ['SIGINT', 'SIGTERM']) {
   process.on(senal, async () => {
     servidor.close();
+    pararWhatsapp();
     await desconectar();
     process.exit(0);
   });

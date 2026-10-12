@@ -146,6 +146,8 @@ function mostrarAcceso() {
 function pintarModoAcceso() {
   $('#campo-nombre').hidden = !modoRegistro;
   $('#campo-nombre input').required = modoRegistro;
+  $('#campo-whatsapp').hidden = !modoRegistro;
+  $('#campo-whatsapp input').required = modoRegistro;
   $('#auth-enviar').textContent = modoRegistro ? 'Crear cuenta' : 'Entrar';
   $('#auth-pregunta').textContent = modoRegistro ? '¿Ya tienes cuenta?' : '¿No tienes cuenta?';
   $('#auth-cambiar').textContent = modoRegistro ? 'Entrar' : 'Crear una';
@@ -162,7 +164,7 @@ $('#form-auth').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const form = ev.target;
   const body = { email: form.email.value, password: form.password.value };
-  if (modoRegistro) body.nombre = form.nombre.value;
+  if (modoRegistro) Object.assign(body, { nombre: form.nombre.value, whatsapp: form.whatsapp.value });
   try {
     const { usuario } = await api(modoRegistro ? '/auth/registro' : '/auth/login', { method: 'POST', body });
     form.reset();
@@ -354,11 +356,12 @@ function abrirMovimiento(mov = null, fecha = null) {
 
 // Fecha de la repetición número «veces» (igual que en el servidor: el día 31 pasa al último del mes).
 function fechaRepeticion(fecha, cada, veces) {
-  if (cada === 'semana') return sumarDias(fecha, 7 * veces);
-  if (cada === 'quincena') return sumarDias(fecha, 14 * veces);
+  const dias = { dia: 1, semana: 7, quincena: 14 }[cada];
+  if (dias) return sumarDias(fecha, dias * veces);
+  const meses = { mes: 1, bimestre: 2, trimestre: 3, semestre: 6, anio: 12 }[cada] * veces;
   const [anio, mes, dia] = fecha.split('-').map(Number);
-  const ultimo = new Date(Date.UTC(anio, mes - 1 + veces + 1, 0)).getUTCDate();
-  return new Date(Date.UTC(anio, mes - 1 + veces, Math.min(dia, ultimo))).toISOString().slice(0, 10);
+  const ultimo = new Date(Date.UTC(anio, mes - 1 + meses + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(anio, mes - 1 + meses, Math.min(dia, ultimo))).toISOString().slice(0, 10);
 }
 
 // Muestra el campo «cuántas veces» y explica hasta cuándo llegarán las repeticiones.
@@ -373,7 +376,7 @@ function pintarRepeticion() {
   if (!activo) return;
 
   const veces = Number(form.veces.value);
-  const valido = form.fecha.value && Number.isInteger(veces) && veces >= 1 && veces <= 104;
+  const valido = form.fecha.value && Number.isInteger(veces) && veces >= 1 && veces <= 366;
   nota.textContent = [
     valido && `Última repetición: ${fechaTexto(fechaRepeticion(form.fecha.value, cada, veces), { day: 'numeric', month: 'long', year: 'numeric' })}.`,
     movEnEdicion?.enSerie && 'Sustituye las repeticiones posteriores a este movimiento.',
@@ -939,6 +942,43 @@ function pintarCompartir(miembros) {
   ];
 }
 
+// ---------- vista: mi cuenta ----------
+
+function pintarCuenta() {
+  const u = estado.usuario;
+  const guardar = (ev) => {
+    ev.preventDefault();
+    const form = ev.target;
+    intentar(async () => {
+      const { usuario } = await api('/auth/yo', { method: 'PATCH', body: { nombre: form.nombre.value, whatsapp: form.whatsapp.value } });
+      estado.usuario = usuario;
+      $('#usuario').textContent = `${usuario.nombre} · ${usuario.email}`;
+      avisar('Datos guardados');
+      render();
+    });
+  };
+
+  return [
+    h('div', { class: 'periodo' }, h('h2', { class: 'izquierda' }, 'Mi cuenta')),
+    h('section', { class: 'panel' },
+      h('form', { class: 'form-linea', onsubmit: guardar },
+        h('label', null, 'Nombre', h('input', { name: 'nombre', maxLength: 60, required: true, value: u.nombre })),
+        h('label', null, 'Correo', h('input', { value: u.email, disabled: true })),
+        h('label', null, 'WhatsApp (con código de país)',
+          h('input', { name: 'whatsapp', type: 'tel', maxLength: 24, placeholder: '51 987 654 321', value: u.whatsapp ? `+${u.whatsapp}` : '' })),
+        h('button', { class: 'primario' }, 'Guardar'),
+      ),
+    ),
+    h('section', { class: 'panel' },
+      h('header', null, h('h3', null, 'Para qué sirve el WhatsApp')),
+      h('p', null, u.whatsapp
+        ? 'El bot de WhatsApp te reconoce por este número: desde él puedes pedir tu estado de cuenta, tus deudas o el informe en PDF, y aquí recibirás los estados de cuenta que envíe el administrador.'
+        : 'Añade tu número para poder pedir por WhatsApp tu estado de cuenta, tus deudas o el informe en PDF, y para recibir los estados de cuenta que envíe el administrador.'),
+      h('p', { class: 'tenue' }, 'Escribe el número con el código de país (51 para Perú). Si lo dejas vacío, el bot no te responderá.'),
+    ),
+  ];
+}
+
 // ---------- vista: administrador ----------
 
 function tamano(bytes) {
@@ -948,12 +988,91 @@ function tamano(bytes) {
 }
 
 async function cargarAdmin() {
-  const [almacenamiento, { usuarios }] = await Promise.all([api('/admin/almacenamiento'), api('/admin/usuarios')]);
-  return { almacenamiento, usuarios };
+  const [almacenamiento, { usuarios }, whatsapp, ia] = await Promise.all([
+    api('/admin/almacenamiento'),
+    api('/admin/usuarios'),
+    api('/admin/whatsapp'),
+    api('/admin/ia'),
+  ]);
+  return { almacenamiento, usuarios, whatsapp, ia };
 }
 
-function pintarAdmin({ almacenamiento: a, usuarios }) {
+// Mientras se espera el escaneo del QR, se consulta el estado cada 3 segundos y se repinta.
+let sondeoWhatsapp = null;
+function vigilarWhatsapp() {
+  clearTimeout(sondeoWhatsapp);
+  sondeoWhatsapp = setTimeout(async () => {
+    if (estado.vista !== 'admin' || estado.seccion.admin !== 'whatsapp' || memoria.vista !== 'admin') return;
+    try {
+      memoria.datos.whatsapp = await api('/admin/whatsapp');
+      render(true);
+    } catch {
+      // Fallo puntual de red: se reintenta en la siguiente vuelta.
+      vigilarWhatsapp();
+    }
+  }, 3000);
+}
+
+const telefono = (numero) => (numero ? `+${numero}` : 'Sin WhatsApp');
+
+function pintarAdmin(datos) {
+  const { almacenamiento: a, usuarios, whatsapp: w, ia } = datos;
   const porcentaje = a.porcentaje < 0.1 && a.usado > 0 ? '< 0.1' : a.porcentaje.toFixed(1);
+
+  // ----- WhatsApp -----
+  const accionWhatsapp = (ruta, mensaje) => () =>
+    intentar(async () => {
+      datos.whatsapp = await api(`/admin/whatsapp/${ruta}`, { method: 'POST' });
+      if (mensaje) avisar(mensaje);
+      render(true);
+    });
+
+  const desvincular = () => {
+    if (confirm('¿Desvincular WhatsApp? El bot dejará de responder y habrá que escanear el código de nuevo.')) accionWhatsapp('desconectar', 'WhatsApp desvinculado')();
+  };
+
+  const enviarEstado = (usuarioId, descripcion) =>
+    intentar(async () => {
+      if (!confirm(`¿Enviar ahora el estado de cuenta por WhatsApp a ${descripcion}?`)) return;
+      avisar('Enviando…');
+      const r = await api('/admin/whatsapp/enviar', { method: 'POST', body: { usuarioId } });
+      avisar(r.fallos.length ? `Enviados: ${r.enviados}. No se pudo: ${r.fallos.join('; ')}` : `Estado de cuenta enviado (${r.enviados})`);
+    });
+
+  const estadosWhatsapp = {
+    desconectado: 'Sin vincular',
+    conectando: 'Conectando…',
+    esperando_qr: 'Esperando a que escanees el código',
+    conectado: `Conectado como ${telefono(w.numero)}`,
+  };
+  if (w.estado === 'conectando' || w.estado === 'esperando_qr') vigilarWhatsapp();
+
+  // ----- IA -----
+  const guardarIa = (ev) => {
+    ev.preventDefault();
+    const form = ev.target;
+    intentar(async () => {
+      const body = { modelo: form.modelo.value, activa: form.activa.checked, responderTodo: form.responderTodo.checked };
+      if (form.clave.value.trim()) body.clave = form.clave.value.trim();
+      datos.ia = await api('/admin/ia', { method: 'PUT', body });
+      avisar('Ajustes de la IA guardados');
+      render(true);
+    });
+  };
+
+  const probarIa = () =>
+    intentar(async () => {
+      avisar('Probando la conexión con la IA…');
+      const r = await api('/admin/ia/probar', { method: 'POST' });
+      avisar(r.mensaje);
+    });
+
+  const quitarClave = () =>
+    intentar(async () => {
+      if (!confirm('¿Borrar la clave guardada? La IA dejará de responder.')) return;
+      datos.ia = await api('/admin/ia', { method: 'PUT', body: { clave: null, activa: false } });
+      render(true);
+    });
 
   const crearUsuario = (ev) => {
     ev.preventDefault();
@@ -961,7 +1080,7 @@ function pintarAdmin({ almacenamiento: a, usuarios }) {
     intentar(async () => {
       const { usuario } = await api('/admin/usuarios', {
         method: 'POST',
-        body: { nombre: form.nombre.value, email: form.email.value, password: form.password.value },
+        body: { nombre: form.nombre.value, email: form.email.value, password: form.password.value, whatsapp: form.whatsapp.value },
       });
       avisar(`Cuenta creada para ${usuario.nombre}`);
       render();
@@ -1015,10 +1134,14 @@ function pintarAdmin({ almacenamiento: a, usuarios }) {
             h('tbody', null,
               usuarios.map((u) =>
                 h('tr', null,
-                  h('td', null, u.nombre, u.id === estado.usuario.id && ' (tú)', h('div', { class: 'tenue correo' }, u.email)),
+                  h('td', null, u.nombre, u.id === estado.usuario.id && ' (tú)',
+                    h('div', { class: 'tenue correo' }, u.email),
+                    h('div', { class: 'tenue' }, telefono(u.whatsapp))),
                   h('td', { class: 'ocultar-movil' }, u.registro),
                   h('td', { class: 'monto' }, String(u.libros)),
                   h('td', { class: 'acciones-fila' },
+                    w.estado === 'conectado' && u.whatsapp &&
+                      h('button', { type: 'button', class: 'mini', title: 'Enviarle su estado de cuenta por WhatsApp', onclick: () => enviarEstado(u.id, u.nombre) }, 'Enviar'),
                     u.id !== estado.usuario.id &&
                       h('button', { type: 'button', class: 'mini peligro', onclick: () => eliminarUsuario(u) }, 'Eliminar'),
                   ),
@@ -1035,10 +1158,85 @@ function pintarAdmin({ almacenamiento: a, usuarios }) {
           h('label', null, 'Nombre', h('input', { name: 'nombre', maxLength: 60, required: true, autocomplete: 'off' })),
           h('label', null, 'Correo', h('input', { name: 'email', type: 'email', required: true, autocomplete: 'off' })),
           h('label', null, 'Contraseña', h('input', { name: 'password', type: 'password', minLength: 8, maxLength: 72, required: true, autocomplete: 'new-password' })),
+          h('label', null, 'WhatsApp (opcional)', h('input', { name: 'whatsapp', type: 'tel', maxLength: 24, placeholder: '51 987 654 321', autocomplete: 'off' })),
           h('button', { class: 'primario' }, 'Crear cuenta'),
         ),
       ),
     ],
+
+    whatsapp: () => [
+      h('section', { class: 'panel' },
+        h('header', null, h('h3', null, 'Bot de WhatsApp'), h('span', { class: w.estado === 'conectado' ? 'chip ok' : 'chip' }, estadosWhatsapp[w.estado])),
+        w.aviso && h('p', { class: 'error' }, w.aviso),
+
+        w.estado === 'desconectado' && [
+          h('p', null, 'Vincula una cuenta de WhatsApp para que responda sola a los usuarios registrados: estado de cuenta, deudas, previsión e informes en PDF.'),
+          h('button', { type: 'button', class: 'primario', onclick: accionWhatsapp('conectar') }, 'Conectar y mostrar código QR'),
+        ],
+        w.estado === 'conectando' && h('p', { class: 'tenue' }, 'Conectando con WhatsApp…'),
+        w.estado === 'esperando_qr' && h('div', { class: 'zona-qr' },
+          w.qr && h('img', { src: w.qr, alt: 'Código QR para vincular WhatsApp', width: 280, height: 280 }),
+          h('ol', null,
+            h('li', null, 'Abre WhatsApp en el teléfono que hará de bot.'),
+            h('li', null, 'Entra en Ajustes (o el menú ⋮) → «Dispositivos vinculados».'),
+            h('li', null, 'Pulsa «Vincular un dispositivo» y escanea este código.'),
+            h('li', null, 'El código cambia cada pocos segundos; esta pantalla se actualiza sola.'),
+          ),
+        ),
+        w.estado === 'conectado' && [
+          h('p', null, `${w.conNumero} ${w.conNumero === 1 ? 'usuario tiene' : 'usuarios tienen'} número de WhatsApp registrado. El bot solo responde a esos números; el resto de tus contactos no nota nada.`),
+          h('div', { class: 'form-linea' },
+            h('button', { type: 'button', class: 'primario', disabled: w.conNumero === 0, onclick: () => enviarEstado('todos', `los ${w.conNumero} usuarios con WhatsApp`) }, 'Enviar estado de cuenta a todos'),
+            h('button', { type: 'button', class: 'peligro', onclick: desvincular }, 'Desvincular'),
+          ),
+        ],
+      ),
+
+      h('section', { class: 'panel' },
+        h('header', null, h('h3', null, 'Qué pueden escribirle')),
+        h('ul', { class: 'ayuda' },
+          h('li', null, h('b', null, 'resumen'), ' — estado de cuenta del mes'),
+          h('li', null, h('b', null, 'deudas'), ' — pagos pendientes y vencidos'),
+          h('li', null, h('b', null, 'proximo'), ' — previsión del mes siguiente'),
+          h('li', null, h('b', null, 'año'), ' — totales del año'),
+          h('li', null, h('b', null, 'pdf'), ' — informe del mes en PDF'),
+          h('li', null, h('b', null, 'libros'), ' — ver o cambiar de libro'),
+          h('li', null, h('b', null, 'menu'), ' — lista de opciones'),
+          h('li', null, h('b', null, 'ia …'), ' — pregunta libre a la IA, si está activada'),
+        ),
+        h('p', { class: 'tenue' }, 'Para pedirle algo tú mismo, escríbete en tu propio chat de WhatsApp («Mensaje a ti mismo»). Tu número debe estar en «Mi cuenta».'),
+        h('p', { class: 'tenue' }, 'Aviso: este método usa WhatsApp Web de forma no oficial. WhatsApp puede bloquear el número si detecta automatización o muchos envíos; lo más prudente es usar un número dedicado al bot.'),
+      ),
+    ],
+
+    ia: () =>
+      h('section', { class: 'panel' },
+        h('header', null,
+          h('h3', null, 'Inteligencia artificial'),
+          h('span', { class: ia.activa && ia.tieneClave ? 'chip ok' : 'chip' }, ia.activa && ia.tieneClave ? 'Activada' : 'Desactivada')),
+        h('p', null, 'Con la IA, los usuarios pueden preguntar al bot de WhatsApp con sus propias palabras, por ejemplo «ia ¿cuánto gasté en comida este mes?». La IA solo ve los datos del libro de quien pregunta y no puede modificar nada.'),
+        h('form', { onsubmit: guardarIa },
+          h('label', null, 'Clave de la API de Claude',
+            h('input', {
+              name: 'clave', type: 'password', autocomplete: 'off', maxLength: 300,
+              placeholder: ia.tieneClave ? `Guardada (termina en ${ia.finalClave}). Escribe otra para cambiarla.` : 'sk-ant-…',
+              disabled: ia.origenClave === 'entorno',
+            })),
+          ia.origenClave === 'entorno' && h('p', { class: 'tenue' }, 'La clave viene de la variable ANTHROPIC_API_KEY del servidor; se cambia allí.'),
+          h('label', null, 'Modelo',
+            h('select', { name: 'modelo' }, Object.entries(ia.modelos).map(([id, nombre]) => h('option', { value: id, selected: id === ia.modelo }, nombre)))),
+          h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'activa', checked: ia.activa }), 'Activar la IA en el bot de WhatsApp'),
+          h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'responderTodo', checked: ia.responderTodo }),
+            'Responder a cualquier mensaje de un usuario registrado, sin necesidad de empezar por «ia»'),
+          h('div', { class: 'form-linea' },
+            h('button', { class: 'primario' }, 'Guardar'),
+            h('button', { type: 'button', disabled: !ia.tieneClave, onclick: probarIa }, 'Probar conexión'),
+            ia.origenClave === 'panel' && h('button', { type: 'button', class: 'peligro', onclick: quitarClave }, 'Borrar clave'),
+          ),
+        ),
+        h('p', { class: 'tenue pie-panel' }, 'La clave se crea en console.anthropic.com (API Keys) y su uso es de pago, según los mensajes que se procesen. Se guarda cifrada y nunca se muestra entera. Cada usuario tiene un límite de 40 preguntas a la IA por día.'),
+        h('p', { class: 'tenue' }, 'No actives «responder a cualquier mensaje» si el bot usa tu número personal: contestaría a todo lo que te escriban los usuarios registrados.'),
+      ),
   };
 
   return [
@@ -1052,7 +1250,7 @@ function pintarAdmin({ almacenamiento: a, usuarios }) {
         `${entero(a.totales.usuarios)} ${a.totales.usuarios === 1 ? 'usuario' : 'usuarios'} · ${entero(a.totales.libros)} ${a.totales.libros === 1 ? 'libro' : 'libros'}`),
     ),
 
-    segmentos('admin', [['almacenamiento', 'Almacenamiento'], ['usuarios', 'Usuarios', usuarios.length]]),
+    segmentos('admin', [['almacenamiento', 'Almacenamiento'], ['usuarios', 'Usuarios', usuarios.length], ['whatsapp', 'WhatsApp'], ['ia', 'IA']]),
     secciones[estado.seccion.admin](),
   ];
 }
@@ -1064,6 +1262,7 @@ const VISTAS = {
   anio: { cargar: cargarAnio, pintar: pintarAnio },
   informe: { cargar: async () => null, pintar: pintarInforme },
   compartir: { cargar: cargarCompartir, pintar: pintarCompartir },
+  cuenta: { cargar: async () => null, pintar: pintarCuenta },
   admin: { cargar: cargarAdmin, pintar: pintarAdmin },
 };
 let turno = 0;
@@ -1080,9 +1279,9 @@ async function render(reutilizar = false) {
     else boton.removeAttribute('aria-current');
   }
   $('#titulo-libro').textContent = libro ? `${libro.nombre} · ${libro.moneda}` : '';
-  $('#nuevo-rapido').hidden = !puedeEditar() || estado.vista === 'admin';
+  $('#nuevo-rapido').hidden = !puedeEditar() || estado.vista === 'admin' || estado.vista === 'cuenta';
 
-  if (!libro && estado.vista !== 'admin') {
+  if (!libro && estado.vista !== 'admin' && estado.vista !== 'cuenta') {
     cont.replaceChildren(h('p', { class: 'vacio' }, 'No tienes ningún libro. Abre el menú y crea uno con «+ Nuevo libro».'));
     return;
   }
