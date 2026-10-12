@@ -188,6 +188,26 @@ async function entrar(usuario) {
   render();
 }
 
+// ---------- tema claro u oscuro ----------
+
+function aplicarTema(tema) {
+  document.documentElement.dataset.tema = tema;
+  $('#cambiar-tema').textContent = tema === 'claro' ? 'Modo oscuro' : 'Modo claro';
+  $('meta[name=theme-color]').content = tema === 'claro' ? '#f2f2f2' : '#000000';
+}
+
+aplicarTema(document.documentElement.dataset.tema ?? 'claro');
+
+$('#cambiar-tema').addEventListener('click', () => {
+  const tema = document.documentElement.dataset.tema === 'claro' ? 'oscuro' : 'claro';
+  aplicarTema(tema);
+  try {
+    localStorage.setItem('tema', tema);
+  } catch {
+    // Almacenamiento bloqueado: el tema vale solo para esta visita.
+  }
+});
+
 // ---------- menú lateral ----------
 
 $('#abrir-menu').addEventListener('click', () => $('#menu').showModal());
@@ -313,8 +333,8 @@ function abrirMovimiento(mov = null, fecha = null) {
   form.reset();
   $('#mov-titulo').textContent = mov ? 'Editar movimiento' : 'Nuevo movimiento';
   $('#mov-error').textContent = '';
-  $('#campo-repetir').hidden = Boolean(mov);
   $('#mov-eliminar').hidden = !mov;
+  form.repetir.options[0].textContent = mov?.enSerie ? 'No cambiar las repeticiones' : 'No repetir';
   if (mov) {
     form.tipo.value = mov.tipo;
     form.descripcion.value = mov.descripcion;
@@ -328,7 +348,36 @@ function abrirMovimiento(mov = null, fecha = null) {
     form.pagado.checked = form.fecha.value <= hoy();
   }
   pintarTipoMovimiento();
+  pintarRepeticion();
   $('#dlg-mov').showModal();
+}
+
+// Fecha de la repetición número «veces» (igual que en el servidor: el día 31 pasa al último del mes).
+function fechaRepeticion(fecha, cada, veces) {
+  if (cada === 'semana') return sumarDias(fecha, 7 * veces);
+  if (cada === 'quincena') return sumarDias(fecha, 14 * veces);
+  const [anio, mes, dia] = fecha.split('-').map(Number);
+  const ultimo = new Date(Date.UTC(anio, mes - 1 + veces + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(anio, mes - 1 + veces, Math.min(dia, ultimo))).toISOString().slice(0, 10);
+}
+
+// Muestra el campo «cuántas veces» y explica hasta cuándo llegarán las repeticiones.
+function pintarRepeticion() {
+  const form = $('#form-mov');
+  const cada = form.repetir.value;
+  const activo = cada !== 'no';
+  $('#campo-veces').hidden = !activo;
+  form.veces.required = activo;
+  const nota = $('#nota-repetir');
+  nota.hidden = !activo;
+  if (!activo) return;
+
+  const veces = Number(form.veces.value);
+  const valido = form.fecha.value && Number.isInteger(veces) && veces >= 1 && veces <= 104;
+  nota.textContent = [
+    valido && `Última repetición: ${fechaTexto(fechaRepeticion(form.fecha.value, cada, veces), { day: 'numeric', month: 'long', year: 'numeric' })}.`,
+    movEnEdicion?.enSerie && 'Sustituye las repeticiones posteriores a este movimiento.',
+  ].filter(Boolean).join(' ');
 }
 
 $('#nuevo-rapido').addEventListener('click', () => abrirMovimiento(null, estado.vista === 'mes' ? estado.dia : null));
@@ -340,6 +389,9 @@ $('#mov-eliminar').addEventListener('click', () => {
 
 $('#form-mov').addEventListener('change', (ev) => {
   if (ev.target.name === 'tipo') pintarTipoMovimiento();
+});
+$('#form-mov').addEventListener('input', (ev) => {
+  if (['repetir', 'veces', 'fecha'].includes(ev.target.name)) pintarRepeticion();
 });
 
 $('#form-mov').addEventListener('submit', async (ev) => {
@@ -353,14 +405,18 @@ $('#form-mov').addEventListener('submit', async (ev) => {
     categoria: form.categoria.value,
     pagado: form.pagado.checked,
   };
+  if (form.repetir.value !== 'no') {
+    body.repetir = form.repetir.value;
+    body.veces = Number(form.veces.value);
+  }
   const base = `/libros/${estado.libroId}/movimientos`;
   try {
     if (movEnEdicion) {
-      await api(`${base}/${movEnEdicion.id}`, { method: 'PATCH', body });
+      const { creados } = await api(`${base}/${movEnEdicion.id}`, { method: 'PATCH', body });
+      if (creados > 0) avisar(`Se programaron ${creados} repeticiones`);
     } else {
-      body.repetirMeses = Number(form.repetirMeses.value);
       const { creados } = await api(base, { method: 'POST', body });
-      if (creados > 1) avisar(`Se crearon ${creados} movimientos mensuales`);
+      if (creados > 1) avisar(`Se crearon ${creados} movimientos (el de hoy y ${creados - 1} repeticiones)`);
     }
     $('#dlg-mov').close();
     render();
@@ -562,6 +618,8 @@ function pintarMes({ actual, proximo, pendientes }) {
       h('h2', null, nombreMes(estado.mes)),
       h('button', { type: 'button', class: 'cuadrado', onclick: () => irAMes(siguiente), 'aria-label': 'Mes siguiente' }, '›'),
       estado.mes !== mesActual && h('button', { type: 'button', onclick: () => irAMes(mesActual) }, 'Hoy'),
+      h('span', { class: 'espacio' }),
+      h('button', { type: 'button', title: 'Descargar el informe de este mes en PDF', onclick: () => descargarPdf(...rangoDeMes(estado.mes)) }, 'PDF'),
     ),
 
     h('div', { class: 'tarjetas' },
@@ -710,6 +768,70 @@ function pintarAnio(r) {
 
     segmentos('anio', [['grafica', 'Gráfica'], ['meses', 'Por mes'], ['categorias', 'Categorías']]),
     secciones[estado.seccion.anio](),
+  ];
+}
+
+// ---------- vista: informe en PDF ----------
+
+// Primer y último día de un mes «AAAA-MM».
+const rangoDeMes = (mes) => [`${mes}-01`, sumarDias(`${moverMes(mes, 1)}-01`, -1)];
+
+const descargarPdf = (desde, hasta) =>
+  intentar(async () => {
+    if (!desde || !hasta) throw new Error('Elige las dos fechas');
+    avisar('Generando el PDF…');
+    const res = await fetch(`/api/libros/${estado.libroId}/informe.pdf?desde=${desde}&hasta=${hasta}`);
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'No se pudo generar el PDF');
+    const url = URL.createObjectURL(await res.blob());
+    const enlace = h('a', { href: url, download: `gastos_${libroActual().nombre}_${desde}_a_${hasta}.pdf` });
+    document.body.append(enlace);
+    enlace.click();
+    enlace.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    avisar('PDF descargado');
+  });
+
+function pintarInforme() {
+  const mesHoy = hoy().slice(0, 7);
+  const anio = hoy().slice(0, 4);
+  const [desdeVisto, hastaVisto] = rangoDeMes(estado.mes);
+
+  const rapido = (titulo, detalle, desde, hasta) =>
+    h('button', { type: 'button', class: 'opcion', onclick: () => descargarPdf(desde, hasta) },
+      h('strong', null, titulo),
+      h('small', { class: 'capital' }, detalle),
+    );
+  const delMes = (titulo, mes) => rapido(titulo, nombreMes(mes), ...rangoDeMes(mes));
+
+  const elegirFechas = (ev) => {
+    ev.preventDefault();
+    descargarPdf(ev.target.desde.value, ev.target.hasta.value);
+  };
+
+  return [
+    h('div', { class: 'periodo' }, h('h2', { class: 'izquierda' }, 'Informe en PDF')),
+
+    h('section', { class: 'panel' },
+      h('header', null, h('h3', null, 'Descarga rápida'), h('span', { class: 'tenue' }, `libro «${libroActual().nombre}»`)),
+      h('div', { class: 'opciones' },
+        delMes('Mes pasado', moverMes(mesHoy, -1)),
+        delMes('Este mes', mesHoy),
+        delMes('Mes siguiente', moverMes(mesHoy, 1)),
+        rapido('Todo el año', anio, `${anio}-01-01`, `${anio}-12-31`),
+      ),
+    ),
+
+    h('section', { class: 'panel' },
+      h('header', null, h('h3', null, 'Elegir fechas')),
+      h('p', { class: 'tenue' }, 'Sirve para cualquier periodo: meses anteriores, el actual o fechas futuras con pagos programados.'),
+      h('form', { class: 'form-linea', onsubmit: elegirFechas },
+        h('label', null, 'Desde', h('input', { name: 'desde', type: 'date', required: true, value: desdeVisto })),
+        h('label', null, 'Hasta', h('input', { name: 'hasta', type: 'date', required: true, value: hastaVisto })),
+        h('button', { class: 'primario' }, 'Descargar PDF'),
+      ),
+    ),
+
+    h('p', { class: 'tenue' }, 'El PDF incluye el resumen del periodo y la lista completa de gastos e ingresos, con su fecha, categoría, estado y monto.'),
   ];
 }
 
@@ -940,6 +1062,7 @@ function pintarAdmin({ almacenamiento: a, usuarios }) {
 const VISTAS = {
   mes: { cargar: cargarMes, pintar: pintarMes },
   anio: { cargar: cargarAnio, pintar: pintarAnio },
+  informe: { cargar: async () => null, pintar: pintarInforme },
   compartir: { cargar: cargarCompartir, pintar: pintarCompartir },
   admin: { cargar: cargarAdmin, pintar: pintarAdmin },
 };

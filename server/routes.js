@@ -2,8 +2,9 @@ import { Router } from 'express';
 import mongoose from 'mongoose';
 import { Usuario, Libro, Movimiento } from './models.js';
 import { ErrorHttp, texto } from './errores.js';
+import { generarInforme } from './informe.js';
 
-const MAX_REPETICIONES = 36;
+const MAX_REPETICIONES = 104;
 const redondear = (n) => Math.round(n * 100) / 100;
 
 // ---------- utilidades de fechas (todo en UTC, formato AAAA-MM-DD) ----------
@@ -23,6 +24,46 @@ function sumarMeses(fecha, n) {
   const mes = fecha.getUTCMonth() + n;
   const ultimoDia = new Date(Date.UTC(anio, mes + 1, 0)).getUTCDate();
   return new Date(Date.UTC(anio, mes, Math.min(fecha.getUTCDate(), ultimoDia)));
+}
+
+function sumarDias(fecha, n) {
+  const copia = new Date(fecha);
+  copia.setUTCDate(copia.getUTCDate() + n);
+  return copia;
+}
+
+// Fecha de la repetición número i según la frecuencia elegida.
+const SALTOS = {
+  semana: (fecha, i) => sumarDias(fecha, 7 * i),
+  quincena: (fecha, i) => sumarDias(fecha, 14 * i),
+  mes: sumarMeses,
+};
+
+// Lee { repetir: 'semana' | 'quincena' | 'mes', veces } del cuerpo; null si no se pide repetir.
+function leerRepeticion(cuerpo) {
+  let cada = cuerpo.repetir;
+  let veces = Number(cuerpo.veces);
+  // Formato anterior: solo «repetirMeses».
+  if (cada === undefined && Number(cuerpo.repetirMeses) > 0) {
+    cada = 'mes';
+    veces = Number(cuerpo.repetirMeses);
+  }
+  if (cada === undefined || cada === null || cada === 'no' || cada === '') return null;
+  if (!Object.hasOwn(SALTOS, cada)) throw new ErrorHttp(400, 'Frecuencia de repetición inválida');
+  if (!Number.isInteger(veces) || veces < 1 || veces > MAX_REPETICIONES) {
+    throw new ErrorHttp(400, `El número de repeticiones debe estar entre 1 y ${MAX_REPETICIONES}`);
+  }
+  return { cada, veces };
+}
+
+// Copias futuras de un movimiento; siempre nacen pendientes.
+function copiasFuturas(base, repeticion) {
+  return Array.from({ length: repeticion.veces }, (_, i) => ({
+    ...base,
+    fecha: SALTOS[repeticion.cada](base.fecha, i + 1),
+    pagado: false,
+    fechaPago: null,
+  }));
 }
 
 // ---------- acceso a libros ----------
@@ -240,28 +281,39 @@ libro.get('/pendientes', async (req, res) => {
 
 libro.post('/movimientos', puedeEditar, async (req, res) => {
   const datos = leerMovimiento(req.body);
-  const repetir = Number(req.body.repetirMeses) || 0;
-  if (!Number.isInteger(repetir) || repetir < 0 || repetir > MAX_REPETICIONES) {
-    throw new ErrorHttp(400, `Se puede repetir como máximo ${MAX_REPETICIONES} meses`);
-  }
+  const repeticion = leerRepeticion(req.body);
 
   const base = { ...datos, libro: req.libro._id, creadoPor: req.usuario.id };
-  if (repetir > 0) base.serie = new mongoose.Types.ObjectId();
+  if (repeticion) base.serie = new mongoose.Types.ObjectId();
 
-  const documentos = [base];
-  for (let i = 1; i <= repetir; i++) {
-    // Las repeticiones futuras siempre nacen pendientes.
-    documentos.push({ ...base, fecha: sumarMeses(datos.fecha, i), pagado: false, fechaPago: null });
-  }
-  const creados = await Movimiento.insertMany(documentos);
+  const creados = await Movimiento.insertMany([base, ...(repeticion ? copiasFuturas(base, repeticion) : [])]);
   res.status(201).json({ movimiento: movPublico(creados[0]), creados: creados.length });
 });
 
+// Al editar también se puede pedir repetir: se generan las repeticiones a partir de este movimiento.
+// Si ya pertenecía a una serie, las posteriores se sustituyen por las nuevas.
 libro.patch('/movimientos/:id', puedeEditar, async (req, res) => {
   const mov = await cargarMovimiento(req);
+  const repeticion = leerRepeticion(req.body);
   Object.assign(mov, leerMovimiento(req.body, true));
+
+  let creados = 0;
+  if (repeticion) {
+    if (mov.serie) {
+      await Movimiento.deleteMany({ libro: req.libro._id, serie: mov.serie, _id: { $ne: mov._id }, fecha: { $gt: mov.fecha } });
+    } else {
+      mov.serie = new mongoose.Types.ObjectId();
+    }
+  }
   await mov.save();
-  res.json({ movimiento: movPublico(mov) });
+  if (repeticion) {
+    const base = {
+      libro: mov.libro, tipo: mov.tipo, descripcion: mov.descripcion, categoria: mov.categoria,
+      monto: mov.monto, fecha: mov.fecha, serie: mov.serie, creadoPor: req.usuario.id,
+    };
+    creados = (await Movimiento.insertMany(copiasFuturas(base, repeticion))).length;
+  }
+  res.json({ movimiento: movPublico(mov), creados });
 });
 
 // ?siguientes=1 elimina también las repeticiones posteriores de la misma serie.
@@ -273,6 +325,24 @@ libro.delete('/movimientos/:id', puedeEditar, async (req, res) => {
     await mov.deleteOne();
   }
   res.status(204).end();
+});
+
+// ---------- informe en PDF ----------
+
+// ?desde=AAAA-MM-DD&hasta=AAAA-MM-DD (cualquier periodo: pasado, actual o futuro)
+libro.get('/informe.pdf', async (req, res) => {
+  const desde = leerFecha(req.query.desde, 'la fecha inicial');
+  const hasta = leerFecha(req.query.hasta, 'la fecha final');
+  if (hasta < desde) throw new ErrorHttp(400, 'La fecha final debe ser posterior a la inicial');
+  if (hasta - desde > 3 * 366 * 24 * 60 * 60 * 1000) throw new ErrorHttp(400, 'El periodo no puede superar los 3 años');
+
+  const movimientos = await Movimiento.find({ libro: req.libro._id, fecha: { $gte: desde, $lte: hasta } })
+    .sort({ fecha: 1, createdAt: 1 })
+    .limit(10000);
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="gastos_${fechaTexto(desde)}_a_${fechaTexto(hasta)}.pdf"`);
+  generarInforme(res, { libro: req.libro, desde, hasta, movimientos });
 });
 
 // ---------- resumen anual ----------

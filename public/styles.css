@@ -1,7 +1,8 @@
 /* Identidad N.F.T.A CORP: fondo negro, tarjetas blancas y rojo solo para lo pendiente. */
 :root {
   --rojo: #d7141f;
-  /* Colores de la superficie actual. Aquí, la página (negra); las tarjetas los redefinen. */
+  /* Colores de la superficie actual. Aquí, la página en modo oscuro; las tarjetas los redefinen. */
+  --fondo: #000000;
   --tinta: #ffffff;
   --superficie: #000000;
   --realce: #1a1a1a;
@@ -14,6 +15,21 @@
   --normal: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
   color-scheme: dark;
 }
+
+/* Modo claro: la página pasa a gris muy claro con tinta negra; las tarjetas siguen blancas. */
+:root[data-tema="claro"] {
+  --fondo: #f1f1f1;
+  --tinta: #0b0b0b;
+  --superficie: #f1f1f1;
+  --realce: #e0e0e0;
+  --suave: #3a3a3a;
+  --tenue: #666666;
+  --linea: #d4d4d4;
+  --linea-fuerte: #8c8c8c;
+  color-scheme: light;
+}
+:root[data-tema="claro"] :is(.panel, .tarjeta, .tira) { border-color: #dddddd; }
+:root[data-tema="claro"] .tarjeta.destacada { border-color: #000000; }
 
 /* Superficies blancas: todo lo que va dentro usa tinta negra automáticamente. */
 .panel, .tarjeta, .tira, dialog {
@@ -36,7 +52,7 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   min-height: 100dvh;
-  background: #000;
+  background: var(--fondo);
   color: var(--tinta);
   font: 15px/1.45 var(--normal);
   -webkit-font-smoothing: antialiased;
@@ -116,7 +132,7 @@ label.check { display: flex; align-items: center; gap: .6rem; font-size: .95rem;
   gap: .75rem;
   padding: .6rem 16px;
   padding-top: calc(.6rem + env(safe-area-inset-top));
-  background: #000;
+  background: var(--fondo);
   border-bottom: 1px solid var(--linea);
 }
 .hamburguesa, .hamburguesa::before, .hamburguesa::after { display: block; width: 18px; height: 2px; border-radius: 2px; background: currentColor; }
@@ -126,7 +142,8 @@ label.check { display: flex; align-items: center; gap: .6rem; font-size: .95rem;
 .hamburguesa::after { top: 6px; }
 .titulo-libro { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--tenue); font-size: .9rem; }
 
-.contenido { max-width: 1100px; margin: 0 auto; padding: 18px 16px calc(32px + env(safe-area-inset-bottom)); }
+/* El contenido ocupa todo el ancho de la ventana; solo se limita en monitores muy grandes. */
+.contenido { max-width: 1800px; margin: 0 auto; padding: 18px 20px calc(32px + env(safe-area-inset-bottom)); }
 
 /* ---------- Menú lateral ---------- */
 dialog.cajon {
@@ -212,7 +229,8 @@ button.tira:hover { background: var(--realce); border-color: var(--superficie); 
 .gasto { color: var(--suave); }
 .monto { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; font-weight: 700; }
 .vacio { padding: 1.5rem 1rem; margin: 0; text-align: center; color: var(--tenue); }
-.capital { text-transform: capitalize; }
+/* Solo la primera letra: «Septiembre de 2026», no «Septiembre De 2026». */
+.capital::first-letter { text-transform: uppercase; }
 .correo { overflow-wrap: anywhere; }
 
 .chip { display: inline-block; padding: .1rem .55rem; border-radius: 999px; border: 1px dashed var(--linea-fuerte); color: var(--suave); font-size: .72rem; font-weight: 600; white-space: nowrap; }
@@ -272,6 +290,13 @@ button.mov-abrir:hover { background: var(--realce); }
 .mov .cuerpo small { color: var(--tenue); }
 .mov > button.mini { flex: none; min-width: 4.6rem; min-height: 36px; }
 .pie-panel { margin-top: .9rem; }
+
+/* Opciones grandes de la descarga rápida de informes. */
+.opciones { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .5rem; }
+button.opcion { display: flex; flex-direction: column; align-items: flex-start; gap: .1rem; min-height: 64px; padding: .7rem .9rem; border-radius: 12px; text-align: left; }
+button.opcion strong { font-family: var(--gruesa); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+button.opcion small { color: var(--tenue); font-weight: 400; }
+.nota-repetir { margin: -.3rem 0 .8rem; font-size: .82rem; }
 
 /* ---------- Tablas ---------- */
 .tabla-scroll { overflow-x: auto; }

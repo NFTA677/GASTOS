@@ -13,6 +13,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <script src="tema.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -66,6 +67,7 @@
     <nav class="cajon-nav" id="pestanas" aria-label="Secciones">
       <button type="button" data-vista="mes">Mes</button>
       <button type="button" data-vista="anio">Año</button>
+      <button type="button" data-vista="informe">Informe PDF</button>
       <button type="button" data-vista="compartir">Compartir</button>
       <button type="button" data-vista="admin" id="pestana-admin" hidden>Admin</button>
     </nav>
@@ -79,6 +81,7 @@
     <button id="nuevo-libro" type="button" class="ancho">+ Nuevo libro</button>
 
     <div class="cajon-pie">
+      <button id="cambiar-tema" type="button" class="ancho">Modo oscuro</button>
       <button id="instalar" type="button" class="ancho" hidden>Instalar app</button>
       <button id="salir" type="button" class="ancho">Cerrar sesión</button>
     </div>
@@ -108,15 +111,20 @@
       </label>
       <datalist id="categorias"></datalist>
       <label class="check"><input type="checkbox" name="pagado"> <span id="mov-pagado-texto">Ya está pagado</span></label>
-      <label id="campo-repetir">Repetir cada mes
-        <select name="repetirMeses">
-          <option value="0">No repetir</option>
-          <option value="2">Durante 3 meses</option>
-          <option value="5">Durante 6 meses</option>
-          <option value="11">Durante 12 meses</option>
-          <option value="23">Durante 24 meses</option>
-        </select>
-      </label>
+      <div class="fila">
+        <label>Repetir
+          <select name="repetir">
+            <option value="no">No repetir</option>
+            <option value="semana">Cada semana</option>
+            <option value="quincena">Cada 2 semanas</option>
+            <option value="mes">Cada mes</option>
+          </select>
+        </label>
+        <label id="campo-veces" hidden>Cuántas veces más
+          <input name="veces" type="number" min="1" max="104" step="1" value="11" inputmode="numeric">
+        </label>
+      </div>
+      <p class="tenue nota-repetir" id="nota-repetir" hidden></p>
       <p class="error" id="mov-error" role="alert"></p>
       <div class="acciones">
         <button type="button" id="mov-eliminar" class="peligro al-inicio" hidden>Eliminar</button>

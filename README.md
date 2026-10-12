@@ -28,7 +28,9 @@ La conexión se configura en el archivo `.env` (copia `.env.example` como `.env`
 - **Mes:** ingresos, gastos, balance y lo que falta por pagar, la previsión del mes siguiente y tres secciones: Calendario, Pendientes (vencidos y próximos 30 días) y Movimientos.
 - **Calendario:** un punto rojo marca los días con pagos sin hacer y uno gris los días con movimientos ya pagados o ingresos. Al tocar un día se ven sus movimientos y se puede añadir uno en esa fecha.
 - **Movimientos:** tocar un movimiento lo abre para editarlo o eliminarlo; el botón de al lado lo marca como pagado o cobrado.
-- **Repetir cada mes:** al crear un gasto o ingreso fijo (alquiler, salario…) elige durante cuántos meses se repite; así aparece en los meses futuros y en el total del año.
+- **Repetir:** al crear o editar un movimiento se puede repetir cada semana, cada 2 semanas o cada mes, indicando cuántas veces; así aparece en las fechas futuras y en el total del año. Al reprogramar un movimiento que ya se repetía, se sustituyen sus repeticiones posteriores.
+- **Informe PDF:** descarga la lista de gastos e ingresos del mes pasado, el actual, el siguiente, el año o cualquier rango de fechas. También hay un botón «PDF» en la vista del mes.
+- **Modo claro u oscuro:** se cambia desde el menú y se recuerda en cada dispositivo.
 - **Año:** totales anuales, gráfica mes a mes y reparto por categorías.
 - **Compartir:** el propietario de un libro invita a otra persona por su correo (debe estar registrada) con acceso de «solo ver» o «puede editar».
 

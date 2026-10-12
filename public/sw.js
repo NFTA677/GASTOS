@@ -1,6 +1,6 @@
 // Cambia la versión al publicar cambios para que se descarte la caché anterior.
-const CACHE = 'nfta-gastos-v5';
-const ARCHIVOS = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
+const CACHE = 'nfta-gastos-v6';
+const ARCHIVOS = ['/', '/styles.css', '/app.js', '/tema.js', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (ev) => {
   ev.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ARCHIVOS)).then(() => self.skipWaiting()));
