@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import mongoose from 'mongoose';
 import { config } from './config.js';
@@ -22,12 +22,16 @@ export async function conectar() {
     uri = servidorLocal.getUri('gastos');
   }
 
+  const servidor = uri.replace(/^.*@/, '').replace(/[/?].*$/, '');
+  console.log(`Conectando a MongoDB en ${servidor}...`);
   try {
     await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
   } catch (err) {
-    console.error('\nNo se pudo conectar a MongoDB:', err.message);
-    console.error('Revisa en .env el usuario, la contraseña y el servidor, y que en Atlas');
-    console.error('(Network Access) esté permitida la IP desde la que te conectas.\n');
+    const causa = /auth/i.test(err.message)
+      ? 'CAUSA PROBABLE: usuario o contraseña incorrectos (MONGODB_USER / MONGODB_PASSWORD).'
+      : 'CAUSA PROBABLE: Atlas no permite la IP de este servidor. En Atlas, Network Access -> Add IP Address.';
+    // writeSync garantiza que el mensaje llega al registro antes de cerrar el proceso.
+    writeSync(2, `\nNo se pudo conectar a MongoDB: ${err.message}\n${causa}\n\n`);
     process.exit(1);
   }
   console.log(`Conectado a MongoDB (${mongoose.connection.host}, base «${mongoose.connection.name}»)`);
