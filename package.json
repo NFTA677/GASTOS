@@ -1,0 +1,24 @@
+{
+  "name": "registro-gastos",
+  "version": "1.0.0",
+  "description": "Registro de gastos, ingresos y próximos pagos con usuarios y libros compartidos (MongoDB)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "cookie-parser": "^1.4.7",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.0.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb-memory-server-core": "^10.2.0",
+    "mongoose": "^8.18.0"
+  }
+}

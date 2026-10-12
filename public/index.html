@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>N.F.T.A Corp · Gastos</title>
+  <meta name="description" content="Registro de gastos, ingresos y próximos pagos">
+  <meta name="theme-color" content="#000000">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="NFTA Gastos">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Acceso -->
+  <main id="auth" class="auth" hidden>
+    <div class="auth-caja">
+      <h1 class="logo grande" aria-label="N.F.T.A Corp"><b>N.F.T.A</b><i>Corp</i></h1>
+      <p class="tenue">Registro de gastos, ingresos y próximos pagos.</p>
+      <form id="form-auth">
+        <label id="campo-nombre" hidden>Nombre
+          <input name="nombre" autocomplete="name" maxlength="60">
+        </label>
+        <label>Correo
+          <input name="email" type="email" autocomplete="email" required>
+        </label>
+        <label>Contraseña
+          <input name="password" type="password" minlength="8" maxlength="72" required>
+        </label>
+        <p class="error" id="auth-error" role="alert"></p>
+        <button class="primario" id="auth-enviar">Entrar</button>
+      </form>
+      <p class="tenue centro">
+        <span id="auth-pregunta">¿No tienes cuenta?</span>
+        <button class="enlace" id="auth-cambiar" type="button">Crear una</button>
+      </p>
+    </div>
+  </main>
+
+  <!-- Aplicación -->
+  <div id="app" hidden>
+    <header class="barra">
+      <span class="logo" aria-label="N.F.T.A Corp"><b>N.F.T.A</b><i>Corp</i></span>
+      <label class="selector-libro">
+        <span class="solo-lectores">Libro</span>
+        <select id="libro"></select>
+      </label>
+      <button id="nuevo-libro" type="button" title="Crear un libro nuevo">+ Libro</button>
+      <span class="espacio"></span>
+      <button id="instalar" type="button" hidden>Instalar app</button>
+      <span id="usuario" class="tenue"></span>
+      <button id="salir" type="button">Salir</button>
+    </header>
+
+    <nav class="pestanas" id="pestanas">
+      <button type="button" data-vista="mes">Mes</button>
+      <button type="button" data-vista="anio">Año</button>
+      <button type="button" data-vista="compartir">Compartir</button>
+    </nav>
+
+    <main id="contenido" class="contenido"></main>
+  </div>
+
+  <!-- Formulario de movimiento -->
+  <dialog id="dlg-mov">
+    <form id="form-mov" method="dialog">
+      <h2 id="mov-titulo">Nuevo movimiento</h2>
+      <div class="segmento">
+        <label><input type="radio" name="tipo" value="gasto" checked> Gasto</label>
+        <label><input type="radio" name="tipo" value="ingreso"> Ingreso</label>
+      </div>
+      <label>Descripción
+        <input name="descripcion" maxlength="120" required>
+      </label>
+      <div class="fila">
+        <label>Monto
+          <input name="monto" type="number" step="0.01" min="0.01" inputmode="decimal" required>
+        </label>
+        <label>Fecha
+          <input name="fecha" type="date" required>
+        </label>
+      </div>
+      <label>Categoría
+        <input name="categoria" list="categorias" maxlength="40" placeholder="General">
+      </label>
+      <datalist id="categorias"></datalist>
+      <label class="check"><input type="checkbox" name="pagado"> <span id="mov-pagado-texto">Ya está pagado</span></label>
+      <label id="campo-repetir">Repetir cada mes
+        <select name="repetirMeses">
+          <option value="0">No repetir</option>
+          <option value="2">Durante 3 meses</option>
+          <option value="5">Durante 6 meses</option>
+          <option value="11">Durante 12 meses</option>
+          <option value="23">Durante 24 meses</option>
+        </select>
+      </label>
+      <p class="error" id="mov-error" role="alert"></p>
+      <div class="acciones">
+        <button type="button" data-cerrar>Cancelar</button>
+        <button class="primario" value="guardar">Guardar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Formulario de libro -->
+  <dialog id="dlg-libro">
+    <form id="form-libro" method="dialog">
+      <h2 id="libro-titulo">Nuevo libro</h2>
+      <p class="tenue">Un libro agrupa movimientos: por ejemplo «Personal», «Casa» o «Viaje».</p>
+      <label>Nombre
+        <input name="nombre" maxlength="60" required>
+      </label>
+      <label>Moneda
+        <select name="moneda"></select>
+      </label>
+      <p class="error" id="libro-error" role="alert"></p>
+      <div class="acciones">
+        <button type="button" data-cerrar>Cancelar</button>
+        <button class="primario" value="guardar">Guardar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="aviso" class="aviso" role="status" hidden></div>
+  <script src="app.js" type="module"></script>
+</body>
+</html>
