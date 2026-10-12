@@ -47,6 +47,8 @@ export const config = {
   correo: {
     remitente: process.env.CORREO_REMITENTE?.trim() || '',
     nombreRemitente: process.env.CORREO_NOMBRE?.trim() || 'N.F.T.A Gastos',
+    cuentaCloudflare: process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || '',
+    tokenCloudflare: process.env.CLOUDFLARE_EMAIL_TOKEN?.trim() || '',
     claveBrevo: process.env.BREVO_API_KEY?.trim() || '',
     smtpHost: process.env.SMTP_HOST?.trim() || '',
     smtpPuerto: Number(process.env.SMTP_PORT) || 587,

@@ -48,7 +48,7 @@ La conexión se configura en el archivo `.env` (copia `.env.example` como `.env`
 
 - **Olvidé mi contraseña:** en la pantalla de acceso. Se envía un código de 6 dígitos (válido 15 minutos, 5 intentos) por WhatsApp si el bot está conectado y la cuenta tiene número, y por correo si está configurado. Si no hay ningún canal, el administrador puede poner una contraseña nueva desde Admin → Usuarios.
 - **Compartir → Enviar el estado de cuenta:** se elige el periodo (este mes, pasado, siguiente, año o fechas) y el destino: tu WhatsApp (lo envía el bot), un correo, el menú de compartir del dispositivo o descargar el PDF.
-- **Configurar el correo:** hacen falta `CORREO_REMITENTE` y una de dos opciones. Con **Brevo** (recomendado en el plan gratuito de Render, que bloquea los puertos de correo): crea una cuenta en brevo.com, verifica la dirección remitente y pon su clave en `BREVO_API_KEY`. Con **SMTP**: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` y `SMTP_PASS`.
+- **Configurar el correo:** hacen falta `CORREO_REMITENTE` y una de tres opciones. Con **Cloudflare Email Service**: da de alta tu dominio en «Envío de email», crea un API Token con permiso de envío y pon `CLOUDFLARE_ACCOUNT_ID` y `CLOUDFLARE_EMAIL_TOKEN`; el remitente debe ser de ese dominio (enviar a cualquier destinatario requiere el plan Workers Paid; gratis solo a direcciones verificadas). Con **Brevo**: verifica la dirección remitente y pon su clave en `BREVO_API_KEY`. Con **SMTP**: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` y `SMTP_PASS` (el plan gratuito de Render bloquea esos puertos).
 
 ## Publicarla en Render
 
