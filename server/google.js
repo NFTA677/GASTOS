@@ -110,7 +110,7 @@ rutasGoogle.get('/callback', async (req, res) => {
       if (!tokens.refresh_token) return volver('errorGoogle', 'Google no dio acceso permanente. Quita la app en myaccount.google.com/permissions y vuelve a vincular.');
 
       usuario.googleId = perfil.sub;
-      usuario.gmail = { email, token: cifrar(tokens.refresh_token), activo: true, desde: new Date(), registrados: 0 };
+      usuario.gmail = { email, nombre: perfil.name?.slice(0, 120), token: cifrar(tokens.refresh_token), activo: true, desde: new Date(), registrados: 0 };
       await usuario.save();
       accesos.delete(usuario.id);
       return volver('google', 'gmail');
@@ -260,8 +260,8 @@ function gastoSinIa(correo) {
 const dias = (a, b) => Math.abs(new Date(`${a}T00:00:00Z`) - new Date(`${b}T00:00:00Z`)) / 86400000;
 
 // Convierte lo que dijo la IA (o el filtro sin IA) en datos para registrar, o null si no es un gasto.
-async function interpretar(correo, monedaLibro) {
-  const gasto = (await leerGastoDeCorreo(correo)) ?? gastoSinIa(correo);
+async function interpretar(correo, monedaLibro, titular) {
+  const gasto = (await leerGastoDeCorreo(correo, titular)) ?? gastoSinIa(correo);
   if (!gasto?.esGasto) return null;
   const monto = Number(gasto.monto);
   if (!Number.isFinite(monto) || monto <= 0) return null;
@@ -275,6 +275,9 @@ async function interpretar(correo, monedaLibro) {
 }
 
 const enCurso = new Set();
+
+// Quién es el titular, para que la IA reconozca las transferencias a sus propias cuentas.
+const titularDe = (usuario) => [usuario.nombre, usuario.gmail?.nombre, usuario.gmail?.email && `correo ${usuario.gmail.email}`].filter(Boolean).join(' · ');
 const DIA = 86400000;
 // Como mucho estos correos en cada escaneo de meses anteriores (se puede repetir para seguir).
 const MAX_ESCANEO = 150;
@@ -319,7 +322,7 @@ async function procesarCorreos(usuario, libro, autorizacion, q, resultado, { max
   for (const id of pendientes.slice(0, maxCorreos)) {
     const correo = leerMensaje(await pedirGoogle(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`, autorizacion));
     // Si la IA falla, el correo no se marca como visto y se vuelve a intentar en la próxima revisión.
-    const datos = await interpretar(correo, libro.moneda);
+    const datos = await interpretar(correo, libro.moneda, titularDe(usuario));
     await CorreoVisto.updateOne({ _id: `${usuario.id}:${id}` }, { $setOnInsert: { visto: new Date() } }, { upsert: true });
     resultado.revisados += 1;
     if (datos) {
@@ -457,6 +460,10 @@ async function revisarTodos() {
 // Revisa el correo de todos los que lo vincularon cada pocos minutos.
 export function iniciarRevisionGmail() {
   if (!googleDisponible() || temporizador) return;
+  // Un escaneo que estaba en marcha cuando se reinició el servidor ya no sigue: se marca como interrumpido.
+  Usuario.updateMany({ 'gmail.escaneo.estado': 'en curso' }, {
+    $set: { 'gmail.escaneo.estado': 'error', 'gmail.escaneo.fin': new Date(), 'gmail.escaneo.error': 'Se interrumpió porque el servidor se reinició. Vuelve a escanear: seguirá donde quedó.' },
+  }).catch((err) => console.error('Escaneos interrumpidos:', err.message));
   setTimeout(revisarTodos, 30_000);
   temporizador = setInterval(revisarTodos, config.minutosGmail * 60_000);
 }

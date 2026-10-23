@@ -14,6 +14,8 @@ const usuarioSchema = new Schema(
     // Lectura de Gmail para registrar solos los gastos que llegan por correo (bancos, tiendas, apps).
     gmail: {
       email: String,
+      // Nombre de la cuenta de Google, para reconocer transferencias a sus propias cuentas.
+      nombre: String,
       // Token de actualización de Google, cifrado; con él se piden accesos nuevos sin volver a preguntar.
       token: String,
       activo: { type: Boolean, default: false },

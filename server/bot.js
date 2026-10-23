@@ -471,7 +471,7 @@ export async function contextoParaIa(usuario, { libroId, canal = 'whatsapp', pue
   const d = await datosDe(libro);
   const [delCorreo, historico] = await Promise.all([
     usuario.gmail?.token
-      ? Movimiento.find({ libro: libro._id, correoId: { $exists: true }, fecha: { $gte: aFecha(sumarDias(d.hoy, -90)) } }).sort('-fecha').limit(150).lean()
+      ? Movimiento.find({ libro: libro._id, correoId: { $exists: true } }).sort('-fecha').limit(150).lean()
       : [],
     resumenHistorico(libro, d.hoy),
   ]);
@@ -493,7 +493,7 @@ export async function contextoParaIa(usuario, { libroId, canal = 'whatsapp', pue
           ...(escaneo && {
             ultimoEscaneo: { estado: escaneo.estado, desde: aTexto(escaneo.desde), hasta: aTexto(escaneo.hasta), revisados: escaneo.revisados, registrados: escaneo.registrados, quedanMas: escaneo.quedan },
           }),
-          gastosUltimos90Dias: delCorreo.map(corto),
+          gastosRegistrados: delCorreo.map(corto),
         }
       : { vinculado: false },
     mesActual: { mes: d.mes, totales: d.totalMes, movimientos: d.delMes.slice(0, 200).map(corto) },
