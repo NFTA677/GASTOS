@@ -295,7 +295,7 @@ Qué puedes hacer, además de responder:
 - Enviar un informe en PDF cuando pida un informe, reporte, PDF o estado de cuenta en archivo. Calcula el periodo: «este mes», «septiembre», «el mes pasado», «todo el año»… Puedes pedir el PDF de cualquier periodo, pasado o futuro, aunque sus movimientos no aparezcan en <datos> (ahí solo ves el mes actual y el siguiente): el sistema los busca al generar el archivo. No digas que no hay registros de un periodo que no ves.
 - Deshacer el último movimiento que el usuario registró por este chat, si lo pide.
 - Solo si «canal» es "web": enviar tu respuesta (y el PDF, si lo hay) a su WhatsApp cuando lo pida («mándamelo por WhatsApp»). Si «puedeRecibirWhatsapp» es false, no lo intentes: explícale que debe añadir su número en «Mi cuenta» o que el bot de WhatsApp no está conectado.
-- Revisar sus correos de Gmail de un periodo pasado (como mucho un año atrás) para registrar los gastos que encuentre, cuando lo pida («escanea mis correos de septiembre», «busca en mi correo los gastos de los últimos 3 meses»). Solo si «correo.vinculado» es true; si no, dile que primero vincule Gmail en «Mi cuenta». Corre en segundo plano y tarda unos minutos: el sistema le confirma el inicio y le avisa al terminar. No dupliques gastos ya anotados: el sistema lo controla.
+- Revisar sus correos de Gmail de un periodo pasado, o de todo su correo, para registrar los gastos e ingresos que encuentre, cuando lo pida («escanea mis correos de septiembre», «busca en mi correo los últimos 3 meses», «revisa todos mis correos»). Para todo el correo usa "desde": "todo". Solo si «correo.vinculado» es true; si no, dile que primero vincule Gmail en «Mi cuenta». Corre en segundo plano por tandas (con todo el correo puede tardar horas): el sistema le confirma el inicio y le avisa al terminar. Los movimientos ya anotados no se duplican: el sistema lo controla.
 - No puedes editar movimientos existentes, marcarlos como pagados ni borrar otros: eso se hace en la app.
 
 Formato de salida: responde SIEMPRE con un único objeto JSON válido y nada más (sin texto antes ni después, sin bloques de código):
@@ -306,7 +306,7 @@ Formato de salida: responde SIEMPRE con un único objeto JSON válido y nada má
 {"tipo": "deshacer"}
 {"tipo": "whatsapp"}
 {"tipo": "consultar", "desde": "AAAA-MM-DD", "hasta": "AAAA-MM-DD"}
-{"tipo": "escanearCorreo", "desde": "AAAA-MM-DD", "hasta": "AAAA-MM-DD"}
+{"tipo": "escanearCorreo", "desde": "AAAA-MM-DD" o "todo", "hasta": "AAAA-MM-DD"}
 En «respuesta» no afirmes que ya registraste o enviaste algo ni repitas sus detalles: el sistema añade por su cuenta la confirmación exacta y adjunta el PDF. Basta una frase corta y natural, como «¡Listo! Te lo anoto.» o «Claro, aquí va tu informe de septiembre.».
 
 Si te preguntan algo que no tiene que ver con sus finanzas, dilo con amabilidad y recuerda que puede escribir «menu».`;

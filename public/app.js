@@ -1184,21 +1184,28 @@ function pintarCuenta() {
       avisar(mensaje);
     });
   };
+  const detenerEscaneo = () => intentar(async () => {
+    const { mensaje } = await api('/auth/google/gmail/escanear', { method: 'DELETE' });
+    avisar(mensaje);
+  });
   const recargarCuenta = () => intentar(async () => actualizar((await api('/auth/yo')).usuario));
   const fechaDe = (f) => new Date(f).toLocaleDateString('es', { timeZone: 'UTC' });
   const e = g?.escaneo;
   const textoEscaneo = e && (e.estado === 'en curso'
-    ? `⏳ Revisando tus correos del ${fechaDe(e.desde)} al ${fechaDe(e.hasta)}: ${e.revisados} revisados, ${e.registrados} movimientos registrados hasta ahora.`
+    ? `⏳ Revisando tus correos ${e.desde.startsWith('2004-01-01') ? 'de todo tu Gmail' : `del ${fechaDe(e.desde)} al ${fechaDe(e.hasta)}`}: ${e.revisados} revisados, ${e.registrados} movimientos registrados hasta ahora.`
     : e.estado === 'error'
       ? `La última revisión de correos anteriores falló: ${e.error}`
       : `Última revisión de correos anteriores (del ${fechaDe(e.desde)} al ${fechaDe(e.hasta)}): ${e.revisados} correos revisados, ${e.registrados} movimientos registrados${e.duplicados ? `, ${e.duplicados} ya estaban anotados` : ''}.${e.quedan ? ' Quedan más correos en ese periodo: vuelve a escanear para seguir.' : ''}`);
 
   const seccionEscaneo = g && h('div', { class: 'escaneo' },
     h('h4', null, 'Correos anteriores'),
-    h('p', { class: 'tenue' }, 'Revisa los avisos de compras, pagos e ingresos que ya tienes en tu Gmail y regístralos en tu libro y calendario. Los que ya anotaste (mismo monto y fecha) no se duplican. También puedes pedírselo al Asistente IA.'),
+    h('p', { class: 'tenue' }, 'Revisa los avisos de compras, pagos e ingresos que ya tienes en tu Gmail, de los meses que elijas o de todo tu correo, y regístralos en tu libro y calendario. Avanza solo por tandas hasta terminar. Los que ya anotaste (mismo monto y fecha) no se duplican. También puedes pedírselo al Asistente IA.'),
     textoEscaneo && h('p', { class: e.estado === 'error' ? 'error' : null }, textoEscaneo),
     e?.estado === 'en curso'
-      ? h('button', { type: 'button', onclick: recargarCuenta }, 'Actualizar progreso')
+      ? h('div', { class: 'acciones' },
+          h('button', { type: 'button', onclick: recargarCuenta }, 'Actualizar progreso'),
+          h('button', { type: 'button', class: 'peligro', onclick: detenerEscaneo }, 'Detener'),
+        )
       : h('form', { class: 'form-linea', onsubmit: escanear },
           h('label', null, 'Periodo',
             h('select', { name: 'meses' },
@@ -1206,6 +1213,8 @@ function pintarCuenta() {
               h('option', { value: '3' }, 'Últimos 3 meses'),
               h('option', { value: '6' }, 'Últimos 6 meses'),
               h('option', { value: '12' }, 'Último año'),
+              h('option', { value: '24' }, 'Últimos 2 años'),
+              h('option', { value: 'todo' }, 'Todo mi correo'),
             )),
           h('button', { class: 'primario' }, 'Escanear correos'),
         ),
@@ -1272,7 +1281,7 @@ const SUGERENCIAS = [
   '¿Cuánto gasté el mes pasado?',
   'Compara mis gastos de los últimos 6 meses',
   'Analiza mis gastos del correo',
-  'Escanea mis correos de los últimos 3 meses',
+  'Escanea todos mis correos',
   '¿En qué categoría gasto más?',
   '¿Qué pagos tengo pendientes?',
   'Mándame el resumen del mes por WhatsApp',
