@@ -11,6 +11,7 @@ import { rutasAdmin } from './admin.js';
 import { rutasApi } from './routes.js';
 import { manejarErrores } from './errores.js';
 import { reanudarWhatsapp, pararWhatsapp } from './whatsapp.js';
+import { rutasGoogle, iniciarRevisionGmail, pararRevisionGmail } from './google.js';
 
 const publico = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -30,6 +31,7 @@ app.use('/api', (req, res, next) => {
   if (estadoBd.lista) return next();
   res.status(503).json({ error: `Sin conexión con la base de datos. ${estadoBd.causa}` });
 });
+app.use('/api/auth/google', rutasGoogle);
 app.use('/api/auth', rutasAuth);
 app.use('/api/admin', requiereSesion, requiereAdmin, rutasAdmin);
 app.use('/api', requiereSesion, rutasApi);
@@ -52,13 +54,19 @@ conectar()
     console.error('No se pudo iniciar MongoDB:', err.message);
   })
   // Si el bot de WhatsApp ya estaba vinculado, se reconecta solo con la sesión guardada.
-  .then(() => estadoBd.lista && reanudarWhatsapp())
+  .then(() => {
+    if (!estadoBd.lista) return;
+    // Revisión periódica del Gmail de quienes lo vincularon, para registrar sus gastos.
+    iniciarRevisionGmail();
+    return reanudarWhatsapp();
+  })
   .catch((err) => console.error('No se pudo reanudar WhatsApp:', err.message));
 
 for (const senal of ['SIGINT', 'SIGTERM']) {
   process.on(senal, async () => {
     servidor.close();
     pararWhatsapp();
+    pararRevisionGmail();
     await desconectar();
     process.exit(0);
   });

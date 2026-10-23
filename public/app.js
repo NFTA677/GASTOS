@@ -139,6 +139,8 @@ function irAMes(mes) {
 
 // entrar | registro | olvide (pedir el código) | codigo (escribirlo junto a la contraseña nueva)
 let modoAcceso = 'entrar';
+// Si el servidor tiene configurado el acceso con Google.
+let googleDisponible = false;
 const MODOS_ACCESO = {
   entrar: { boton: 'Entrar', pregunta: '¿No tienes cuenta?', cambiar: 'Crear una', destino: 'registro' },
   registro: { boton: 'Crear cuenta', pregunta: '¿Ya tienes cuenta?', cambiar: 'Entrar', destino: 'entrar' },
@@ -171,12 +173,14 @@ function pintarModoAcceso(modo = modoAcceso, info = '') {
   $('#auth-pregunta').textContent = textos.pregunta;
   $('#auth-cambiar').textContent = textos.cambiar;
   $('#auth-olvide').parentElement.hidden = modo !== 'entrar';
+  $('#auth-google-caja').hidden = !googleDisponible || (modo !== 'entrar' && modo !== 'registro');
   $('#auth-info').textContent = info || (modo === 'olvide' ? 'Escribe el correo de tu cuenta y te enviaremos un código para poner una contraseña nueva.' : '');
   $('#auth-error').textContent = '';
 }
 
 $('#auth-cambiar').addEventListener('click', () => pintarModoAcceso(MODOS_ACCESO[modoAcceso].destino));
 $('#auth-olvide').addEventListener('click', () => pintarModoAcceso('olvide'));
+$('#auth-google').addEventListener('click', () => location.assign('/api/auth/google?modo=entrar'));
 
 $('#form-auth').addEventListener('submit', async (ev) => {
   ev.preventDefault();
@@ -1144,6 +1148,52 @@ function pintarCuenta() {
     });
   };
 
+  const g = u.gmail;
+  const cuando = (fecha) => (fecha ? new Date(fecha).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' }) : 'todavía no');
+  const actualizar = (usuario) => {
+    estado.usuario = usuario;
+    render();
+  };
+  const revisar = () => intentar(async () => {
+    avisar('Revisando tu correo…');
+    const { nuevos, usuario } = await api('/auth/google/gmail/revisar', { method: 'POST' });
+    actualizar(usuario);
+    avisar(usuario.gmail?.error ? usuario.gmail.error : nuevos ? `${nuevos} gasto${nuevos === 1 ? '' : 's'} nuevo${nuevos === 1 ? '' : 's'} registrado${nuevos === 1 ? '' : 's'}` : 'No hay gastos nuevos en tu correo');
+  });
+  const pausar = (activo) => intentar(async () => actualizar((await api('/auth/google/gmail', { method: 'PATCH', body: { activo } })).usuario));
+  const desvincular = () => {
+    if (!confirm('¿Dejar de leer tu Gmail? Los gastos ya registrados se quedan en tu libro.')) return;
+    intentar(async () => {
+      actualizar((await api('/auth/google/gmail', { method: 'DELETE' })).usuario);
+      avisar('Gmail desvinculado');
+    });
+  };
+
+  const seccionGmail = googleDisponible && h('section', { class: 'panel' },
+    h('header', null, h('h3', null, 'Gastos desde tu Gmail'), g && h('span', { class: 'tenue' }, g.email)),
+    g
+      ? [
+          h('p', null, g.activo
+            ? 'El bot revisa tu correo cada pocos minutos y registra solo en tu libro los gastos que te avisan tus bancos, Yape, Plin, tiendas y apps (compras, consumos, pagos y transferencias).'
+            : 'La lectura de tu correo está en pausa: no se registra nada nuevo.'),
+          g.error && h('p', { class: 'error' }, g.error),
+          h('p', { class: 'tenue' }, `Última revisión: ${cuando(g.ultimaRevision)} · Registrados desde el correo: ${g.registrados}. Solo se leen correos recibidos desde el ${new Date(g.desde).toLocaleDateString('es')}.`),
+          u.whatsapp
+            ? h('p', { class: 'tenue' }, 'Cada gasto que se registre te llegará también por WhatsApp; si alguno no es correcto, responde «deshacer».')
+            : h('p', { class: 'tenue' }, 'Añade tu WhatsApp arriba para recibir un aviso cada vez que se registre un gasto.'),
+          h('div', { class: 'acciones' },
+            g.activo && h('button', { type: 'button', class: 'primario', onclick: revisar }, 'Revisar ahora'),
+            h('button', { type: 'button', onclick: () => pausar(!g.activo) }, g.activo ? 'Pausar' : 'Reanudar'),
+            h('button', { type: 'button', class: 'peligro', onclick: desvincular }, 'Desvincular'),
+          ),
+        ]
+      : [
+          h('p', null, 'Vincula tu cuenta de Google para que el bot lea los avisos de compra y pago que te llegan por correo y los registre solo como gastos en tu libro.'),
+          h('p', { class: 'tenue' }, 'Google te pedirá permiso para leer tus correos. Solo se abren los avisos de compras y pagos, nunca se envía ni se borra nada, y puedes desvincularlo cuando quieras.'),
+          h('button', { type: 'button', class: 'primario', onclick: () => location.assign('/api/auth/google?modo=gmail') }, 'Vincular con Google'),
+        ],
+  );
+
   return [
     h('div', { class: 'periodo' }, h('h2', { class: 'izquierda' }, 'Mi cuenta')),
     h('section', { class: 'panel' },
@@ -1161,7 +1211,9 @@ function pintarCuenta() {
         ? 'El bot de WhatsApp te reconoce por este número: desde él puedes pedir tu estado de cuenta, tus deudas o el informe en PDF, y aquí recibirás los estados de cuenta que envíe el administrador.'
         : 'Añade tu número para poder pedir por WhatsApp tu estado de cuenta, tus deudas o el informe en PDF, y para recibir los estados de cuenta que envíe el administrador.'),
       h('p', { class: 'tenue' }, 'Escribe el número con el código de país (51 para Perú). Si lo dejas vacío, el bot no te responderá.'),
+      !u.tienePassword && h('p', { class: 'tenue' }, 'Tu cuenta usa Google para entrar. Si quieres entrar también con contraseña, cierra sesión y usa «¿Olvidaste tu contraseña?».'),
     ),
+    seccionGmail,
   ];
 }
 
@@ -1566,12 +1618,24 @@ window.addEventListener('appinstalled', () => ($('#instalar').hidden = true));
 
 // ---------- arranque ----------
 
+// Vuelta desde Google: ?google=entrar|nueva|gmail o ?errorGoogle=texto. Se quita de la dirección.
+const vuelta = new URLSearchParams(location.search);
+const resultadoGoogle = vuelta.get('google');
+const errorGoogle = vuelta.get('errorGoogle');
+if (resultadoGoogle || errorGoogle) history.replaceState(null, '', location.pathname);
+if (resultadoGoogle === 'gmail' || resultadoGoogle === 'nueva') estado.vista = 'cuenta';
+
+googleDisponible = await api('/auth/google/estado').then((r) => r.disponible).catch(() => false);
 pintarModoAcceso();
 try {
   const { usuario } = await api('/auth/yo');
   await entrar(usuario);
+  if (errorGoogle) avisar(errorGoogle);
+  else if (resultadoGoogle === 'gmail') avisar('Gmail vinculado: tus gastos por correo se registrarán solos');
+  else if (resultadoGoogle === 'nueva') avisar('Cuenta creada con Google. Añade tu WhatsApp y vincula Gmail si quieres.');
 } catch (err) {
   mostrarAcceso();
   // Sin sesión (401) es lo normal; un fallo del servidor sí se le cuenta al usuario.
-  if (err.estado !== 401) $('#auth-error').textContent = err.message;
+  if (errorGoogle) $('#auth-error').textContent = errorGoogle;
+  else if (err.estado !== 401) $('#auth-error').textContent = err.message;
 }

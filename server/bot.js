@@ -73,7 +73,7 @@ export async function librosDe(usuario) {
   return [...libros.filter((l) => l.propietario.equals(usuario._id)), ...libros.filter((l) => !l.propietario.equals(usuario._id))];
 }
 
-const libroActivo = (usuario, libros) => libros.find((l) => l._id.equals(usuario.libroBot)) ?? libros[0];
+export const libroActivo = (usuario, libros) => libros.find((l) => l._id.equals(usuario.libroBot)) ?? libros[0];
 
 function puedeEscribir(usuario, libro) {
   if (libro.propietario.equals(usuario._id)) return true;
@@ -223,7 +223,7 @@ const ultimoRegistrado = new Map();
  * Crea un movimiento a petición del usuario (por comando o a través de la IA) y devuelve la confirmación.
  * Valida todo aquí: lo que llega puede venir de un modelo de lenguaje.
  */
-export async function registrarMovimiento(usuario, libro, datos) {
+export async function registrarMovimiento(usuario, libro, datos, extra = {}) {
   if (!puedeEscribir(usuario, libro)) return `🔒 En el libro *${libro.nombre}* solo tienes permiso de lectura; no puedo registrar nada ahí.`;
 
   const hoy = hoyLocal();
@@ -249,6 +249,7 @@ export async function registrarMovimiento(usuario, libro, datos) {
     pagado,
     fechaPago: pagado ? new Date() : null,
     creadoPor: usuario._id,
+    ...(extra.correoId && { correoId: extra.correoId }),
   });
   ultimoRegistrado.set(usuario.id, { id: mov._id, cuando: Date.now() });
 

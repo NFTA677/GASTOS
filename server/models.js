@@ -7,7 +7,22 @@ const usuarioSchema = new Schema(
   {
     nombre: { type: String, required: true, trim: true, maxlength: 60 },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true, maxlength: 120 },
-    passwordHash: { type: String, required: true },
+    // Falta en las cuentas creadas con Google hasta que la persona se ponga una contraseña.
+    passwordHash: String,
+    // Identificador de la cuenta de Google vinculada («sub»), para poder entrar con ella.
+    googleId: String,
+    // Lectura de Gmail para registrar solos los gastos que llegan por correo (bancos, tiendas, apps).
+    gmail: {
+      email: String,
+      // Token de actualización de Google, cifrado; con él se piden accesos nuevos sin volver a preguntar.
+      token: String,
+      activo: { type: Boolean, default: false },
+      // Solo se leen correos recibidos desde este momento.
+      desde: Date,
+      ultimaRevision: Date,
+      registrados: { type: Number, default: 0 },
+      error: String,
+    },
     // Solo dígitos con código de país (51987654321). El bot lo usa para saber quién escribe y a quién enviar.
     whatsapp: { type: String, match: /^\d{10,15}$/ },
     // Libro sobre el que responde el bot; si falta, el primero del usuario.
@@ -20,6 +35,8 @@ const usuarioSchema = new Schema(
   { timestamps: true },
 );
 usuarioSchema.index({ whatsapp: 1 }, { unique: true, sparse: true });
+usuarioSchema.index({ googleId: 1 }, { unique: true, sparse: true });
+usuarioSchema.index({ 'gmail.activo': 1 });
 
 // Un "libro" agrupa movimientos. Cada usuario tiene los suyos y puede compartirlos.
 const libroSchema = new Schema(
@@ -53,6 +70,8 @@ const movimientoSchema = new Schema(
     // Movimientos creados juntos con "repetir cada mes" comparten la misma serie.
     serie: { type: ObjectId, default: null },
     creadoPor: { type: ObjectId, ref: 'Usuario' },
+    // Id del correo de Gmail del que salió, si se registró solo a partir de un correo.
+    correoId: String,
   },
   { timestamps: true },
 );
@@ -65,6 +84,11 @@ const ajusteSchema = new Schema({ _id: String, valor: Schema.Types.Mixed }, { ti
 // Sesión de WhatsApp (credenciales y claves de cifrado), para no tener que escanear el QR en cada reinicio.
 const sesionWaSchema = new Schema({ _id: String, datos: String });
 
+// Correos de Gmail ya revisados (fueran gasto o no), para no leerlos ni registrarlos dos veces.
+// Se borran solos a los 60 días.
+const correoVistoSchema = new Schema({ _id: String, visto: { type: Date, default: Date.now, expires: 60 * 24 * 3600 } });
+
+export const CorreoVisto = model('CorreoVisto', correoVistoSchema);
 export const Ajuste = model('Ajuste', ajusteSchema);
 export const SesionWa = model('SesionWa', sesionWaSchema);
 export const Usuario = model('Usuario', usuarioSchema);

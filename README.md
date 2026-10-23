@@ -12,10 +12,11 @@ Aplicación web para llevar las finanzas personales o compartidas: gastos, ingre
 6. [Configuración](#configuración)
 7. [Publicarla en internet](#publicarla-en-internet)
 8. [Envío de correo](#envío-de-correo)
-9. [Cómo está hecha](#cómo-está-hecha)
-10. [Mantenimiento](#mantenimiento)
-11. [Problemas frecuentes](#problemas-frecuentes)
-12. [Limitaciones y seguridad](#limitaciones-y-seguridad)
+9. [Google y gastos desde Gmail](#google-y-gastos-desde-gmail)
+10. [Cómo está hecha](#cómo-está-hecha)
+11. [Mantenimiento](#mantenimiento)
+12. [Problemas frecuentes](#problemas-frecuentes)
+13. [Limitaciones y seguridad](#limitaciones-y-seguridad)
 
 ---
 
@@ -30,6 +31,7 @@ Aplicación web para llevar las finanzas personales o compartidas: gastos, ingre
 | Libros | Cada usuario puede tener varios (Personal, Casa…), cada uno con su moneda, y compartirlos con permiso de lectura o de edición. |
 | Envíos | Estado de cuenta por WhatsApp, por correo o con el menú de compartir del dispositivo. |
 | Bot de WhatsApp | Consulta de saldos y deudas, registro de movimientos y envío de PDF desde el chat. |
+| Google (opcional) | Crear cuenta y entrar con Google. Al vincular Gmail, el bot registra solo los gastos que llegan por correo. |
 | IA (opcional) | Conversación en lenguaje natural con Claude o con modelos de NVIDIA. |
 | Administración | Uso del almacenamiento, alta y baja de usuarios, cambio de contraseñas, WhatsApp e IA. |
 | App instalable | Funciona como aplicación (PWA) en Android, iPhone y ordenador, en modo claro u oscuro. |
@@ -42,7 +44,8 @@ Aplicación web para llevar las finanzas personales o compartidas: gastos, ingre
 
 - **Crear cuenta:** en la pantalla de acceso, «Crear una». Pide nombre, correo, número de WhatsApp con código de país y una contraseña de al menos 8 caracteres. Un celular peruano de 9 dígitos recibe el prefijo 51 automáticamente.
 - **Olvidé mi contraseña:** en la pantalla de acceso. Se envía un código de 6 dígitos, válido 15 minutos y con 5 intentos, por WhatsApp (si el bot está conectado y la cuenta tiene número) y por correo (si está configurado). Con el código se pone una contraseña nueva.
-- **Mi cuenta:** en el menú. Permite cambiar el nombre y el número de WhatsApp.
+- **Continuar con Google:** en la pantalla de acceso, si Google está configurado. Entra en la cuenta con ese correo o crea una nueva (sin contraseña; se puede poner una después con «¿Olvidaste tu contraseña?»).
+- **Mi cuenta:** en el menú. Permite cambiar el nombre y el número de WhatsApp, y vincular Gmail para que los gastos que llegan por correo se registren solos (ver [Google y gastos desde Gmail](#google-y-gastos-desde-gmail)).
 
 ### Menú
 
@@ -254,6 +257,14 @@ Toda la configuración va en variables de entorno: en un archivo `.env` en tu eq
 
 Si hay varios métodos configurados, se usa Brevo, después Cloudflare y por último SMTP.
 
+### Google
+
+| Variable | Para qué sirve |
+|---|---|
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | ID de cliente OAuth de Google. Sin ellos no aparece el botón de Google |
+| `APP_URL` | Dirección pública (`https://…`) para la vuelta desde Google. Si falta, se deduce de la petición |
+| `GMAIL_MINUTOS` | Cada cuántos minutos se revisa el Gmail vinculado (por defecto 10, mínimo 2) |
+
 ---
 
 ## Publicarla en internet
@@ -334,6 +345,36 @@ El **ID de cuenta** es el código que aparece en la barra de direcciones tras `d
 
 ---
 
+## Google y gastos desde Gmail
+
+Con Google configurado aparecen dos cosas:
+
+- **«Continuar con Google»** en la pantalla de acceso: entra o crea la cuenta solo con nombre y correo de Google.
+- **«Vincular con Google»** en *Mi cuenta*: da permiso de solo lectura sobre Gmail. Cada `GMAIL_MINUTOS` (10 por defecto) el servidor busca correos nuevos de compras, consumos, pagos, Yape/Plin, transferencias, boletas y recibos, y registra cada gasto como **pagado** en el libro activo del bot. Si la persona tiene WhatsApp, le llega un aviso y puede responder «deshacer».
+
+Cómo decide si un correo es un gasto:
+
+- **Con la IA activada** (Admin → IA), el modelo lee el correo y extrae monto, moneda, comercio, categoría y fecha; descarta publicidad, recordatorios, dinero recibido y devoluciones.
+- **Sin IA**, solo se registran correos cuyo asunto dice claramente compra, consumo, pago o transferencia y que traen un importe en S/, US$, $ o €.
+
+Solo se leen correos recibidos **después de vincular**. Cada correo se revisa una sola vez. Si el cobro está en otra moneda que la del libro, la descripción empieza por esa moneda (por ejemplo `[USD]`).
+
+### Configurarlo en Google Cloud
+
+1. En [console.cloud.google.com](https://console.cloud.google.com) crear un proyecto.
+2. *APIs y servicios → Biblioteca* → activar **Gmail API**.
+3. *Pantalla de consentimiento de OAuth*: tipo **Externo**, nombre de la app, correo de soporte y, en *Permisos (scopes)*, añadir `.../auth/gmail.readonly`. Mientras esté **en pruebas**, añadir en *Usuarios de prueba* los correos que lo vayan a usar (máximo 100).
+4. *Credenciales → Crear credenciales → ID de cliente de OAuth* → **Aplicación web**, con este URI de redirección autorizado:
+   - `https://TU-DOMINIO/api/auth/google/callback`
+   - para pruebas locales, también `http://localhost:3000/api/auth/google/callback`
+5. En el hosting: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y `APP_URL` (la dirección pública, sin barra final).
+
+`gmail.readonly` es un permiso «restringido»: para abrirlo a cualquier persona (no solo usuarios de prueba) Google exige verificar la app y una evaluación de seguridad. En modo pruebas, Google pide volver a vincular cada 7 días.
+
+En el plan gratuito de Render el servicio se duerme sin visitas y mientras duerme no revisa el correo; al despertar recupera los correos pendientes de la última semana (ver [Mantenerla despierta](#5-mantenerla-despierta)).
+
+---
+
 ## Cómo está hecha
 
 ### Tecnologías
@@ -350,7 +391,7 @@ server/
   index.js      Arranque: seguridad, rutas y archivos estáticos
   config.js     Lectura de las variables de entorno
   db.js         Conexión a MongoDB, con reintentos
-  models.js     Esquemas: Usuario, Libro, Movimiento, Ajuste, SesionWa
+  models.js     Esquemas: Usuario, Libro, Movimiento, Ajuste, SesionWa, CorreoVisto
   auth.js       Registro, sesión, recuperación de contraseña y permisos de administrador
   routes.js     Libros, miembros, movimientos, resumen, informe PDF y envíos
   admin.js      Almacenamiento, usuarios, WhatsApp e IA
@@ -359,6 +400,7 @@ server/
   ia.js         Proveedores de IA, cifrado de claves y conversación
   informe.js    Generación del PDF
   correo.js     Envío de correo por Brevo, Cloudflare o SMTP
+  google.js     Acceso con Google y lectura de Gmail para registrar gastos
   errores.js    Errores HTTP y validación de textos
 public/
   index.html    Estructura de la página y los diálogos

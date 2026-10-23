@@ -55,5 +55,14 @@ export const config = {
     smtpUsuario: process.env.SMTP_USER?.trim() || '',
     smtpClave: process.env.SMTP_PASS || '',
   },
+  // Acceso con Google y lectura de Gmail (Google Cloud Console → Credenciales → ID de cliente OAuth).
+  google: {
+    clienteId: process.env.GOOGLE_CLIENT_ID?.trim() || '',
+    secreto: process.env.GOOGLE_CLIENT_SECRET?.trim() || '',
+  },
+  // Dirección pública de la app (https://…), para la vuelta desde Google. Si falta, se deduce de la petición.
+  urlPublica: (process.env.APP_URL?.trim() || '').replace(/\/+$/, ''),
+  // Cada cuántos minutos se revisa el Gmail de quienes lo vincularon.
+  minutosGmail: Math.max(2, Number(process.env.GMAIL_MINUTOS) || 10),
   produccion: process.env.NODE_ENV === 'production',
 };

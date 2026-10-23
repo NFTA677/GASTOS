@@ -21,3 +21,10 @@ services:
         sync: false
       - key: MONGODB_HOST
         sync: false
+      # Opcionales: entrar con Google y registrar gastos desde Gmail.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: APP_URL
+        sync: false

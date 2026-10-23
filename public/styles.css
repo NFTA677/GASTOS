@@ -138,6 +138,10 @@ label.check { display: flex; align-items: center; gap: .6rem; font-size: .95rem;
 /* El botón del menú va sin círculo: solo las tres rayas. */
 #abrir-menu { border-color: transparent; border-radius: 10px; }
 .olvide { margin: .9rem 0 0; font-size: .9rem; }
+.separador { display: flex; align-items: center; gap: .75rem; margin: 1rem 0 .5rem; color: var(--tenue); font-size: .85rem; }
+.separador::before, .separador::after { content: ""; flex: 1; border-top: 1px solid currentColor; opacity: .4; }
+.boton-google { display: flex; align-items: center; justify-content: center; gap: .6rem; font-weight: 700; }
+.boton-google svg { flex: none; }
 .opciones.envio { margin: .75rem 0; }
 button.opcion:disabled small { color: var(--tenue); }
 .hamburguesa, .hamburguesa::before, .hamburguesa::after { display: block; width: 18px; height: 2px; border-radius: 2px; background: currentColor; }

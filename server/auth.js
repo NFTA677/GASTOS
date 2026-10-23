@@ -12,7 +12,7 @@ import { correoDisponible, enviarCorreo } from './correo.js';
 const COOKIE = 'sesion';
 const DURACION_MS = 30 * 24 * 60 * 60 * 1000;
 
-function iniciarSesion(res, usuario) {
+export function iniciarSesion(res, usuario) {
   const token = jwt.sign({ id: usuario.id }, config.jwtSecret, { expiresIn: '30d' });
   res.cookie(COOKIE, token, {
     httpOnly: true,
@@ -28,7 +28,18 @@ export async function esAdmin(usuario) {
   return Boolean(primero?._id.equals(usuario._id));
 }
 
-const publico = async (u) => ({ id: u.id, nombre: u.nombre, email: u.email, whatsapp: u.whatsapp ?? '', esAdmin: await esAdmin(u) });
+export const publico = async (u) => ({
+  id: u.id,
+  nombre: u.nombre,
+  email: u.email,
+  whatsapp: u.whatsapp ?? '',
+  esAdmin: await esAdmin(u),
+  tienePassword: Boolean(u.passwordHash),
+  google: Boolean(u.googleId),
+  gmail: u.gmail?.token
+    ? { email: u.gmail.email, activo: u.gmail.activo, desde: u.gmail.desde, ultimaRevision: u.gmail.ultimaRevision ?? null, registrados: u.gmail.registrados ?? 0, error: u.gmail.error ?? '' }
+    : null,
+});
 
 // Deja el número solo con dígitos y código de país; devuelve null si viene vacío.
 export function leerWhatsapp(valor) {
@@ -54,13 +65,18 @@ export async function requiereAdmin(req, res, next) {
   next();
 }
 
-export async function requiereSesion(req, res, next) {
-  let id;
+// Id de la cuenta de la cookie de sesión, o undefined si no hay una válida.
+export function idDeSesion(req) {
   try {
-    id = jwt.verify(req.cookies[COOKIE] ?? '', config.jwtSecret).id;
+    return jwt.verify(req.cookies[COOKIE] ?? '', config.jwtSecret).id;
   } catch {
     // Sin cookie o con una caducada o manipulada.
+    return undefined;
   }
+}
+
+export async function requiereSesion(req, res, next) {
+  let id = idDeSesion(req);
   // Se comprueba que la cuenta siga existiendo, para que una eliminada pierda el acceso al momento.
   // La comprobación se recuerda un minuto: así no cuesta una consulta a la base en cada petición.
   if (id && (cuentasVistas.get(id) ?? 0) < Date.now()) {
@@ -117,8 +133,9 @@ rutasAuth.post('/login', limite, async (req, res) => {
   const email = texto(req.body.email, 'el correo').toLowerCase();
   const password = typeof req.body.password === 'string' ? req.body.password : '';
   const usuario = await Usuario.findOne({ email });
-  if (!usuario || !(await bcrypt.compare(password, usuario.passwordHash))) {
-    throw new ErrorHttp(401, 'Correo o contraseña incorrectos');
+  if (!usuario?.passwordHash || !(await bcrypt.compare(password, usuario.passwordHash))) {
+    // El mismo mensaje exista o no la cuenta; la pista de Google sirve a quien se registró con ella.
+    throw new ErrorHttp(401, `Correo o contraseña incorrectos${config.google.clienteId ? '. Si creaste la cuenta con Google, usa «Continuar con Google».' : ''}`);
   }
   iniciarSesion(res, usuario);
   res.json({ usuario: await publico(usuario) });

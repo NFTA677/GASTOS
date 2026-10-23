@@ -1,0 +1,352 @@
+import { Router } from 'express';
+import jwt from 'jsonwebtoken';
+import { randomBytes } from 'node:crypto';
+import { config } from './config.js';
+import { Usuario, Libro, CorreoVisto } from './models.js';
+import { ErrorHttp } from './errores.js';
+import { iniciarSesion, idDeSesion, publico, requiereSesion } from './auth.js';
+import { cifrar, descifrar, leerGastoDeCorreo, explicarError } from './ia.js';
+import { librosDe, libroActivo, registrarMovimiento } from './bot.js';
+import { whatsappConectado, enviarANumero } from './whatsapp.js';
+
+const GMAIL_LECTURA = 'https://www.googleapis.com/auth/gmail.readonly';
+const COOKIE_ESTADO = 'google_estado';
+const RUTA = '/api/auth/google';
+// Como mucho estos correos por persona en cada revisión, para no gastar la IA de golpe.
+const MAX_CORREOS = 15;
+
+export const googleDisponible = () => Boolean(config.google.clienteId && config.google.secreto);
+
+const urlBase = (req) => config.urlPublica || `${req.protocol}://${req.get('host')}`;
+
+class ErrorGoogle extends Error {
+  constructor(estado, codigo, detalle) {
+    super(detalle || codigo || `Google respondió ${estado}`);
+    this.estado = estado;
+    this.codigo = codigo;
+  }
+}
+
+async function pedirGoogle(url, opciones = {}) {
+  const res = await fetch(url, { ...opciones, signal: AbortSignal.timeout(20000) });
+  const cuerpo = await res.json().catch(() => null);
+  if (!res.ok) throw new ErrorGoogle(res.status, cuerpo?.error?.status ?? cuerpo?.error, cuerpo?.error_description ?? cuerpo?.error?.message);
+  return cuerpo;
+}
+
+const formulario = (datos) => ({
+  method: 'POST',
+  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  body: new URLSearchParams(datos),
+});
+
+// ---------- acceso con Google ----------
+
+export const rutasGoogle = Router();
+
+rutasGoogle.get('/estado', (req, res) => res.json({ disponible: googleDisponible() }));
+
+// Lleva a la pantalla de Google. modo=entrar (iniciar sesión o crear cuenta) o modo=gmail (vincular el correo).
+rutasGoogle.get('/', (req, res) => {
+  if (!googleDisponible()) return res.redirect(`/?errorGoogle=${encodeURIComponent('El acceso con Google no está configurado.')}`);
+  const modo = req.query.modo === 'gmail' ? 'gmail' : 'entrar';
+  const uid = idDeSesion(req);
+  if (modo === 'gmail' && !uid) return res.redirect(`/?errorGoogle=${encodeURIComponent('Inicia sesión antes de vincular Gmail.')}`);
+
+  const nonce = randomBytes(16).toString('hex');
+  const redirectUri = `${urlBase(req)}${RUTA}/callback`;
+  // El estado viaja firmado en una cookie: así la vuelta solo se acepta desde este mismo navegador.
+  res.cookie(COOKIE_ESTADO, jwt.sign({ nonce, modo, uid: modo === 'gmail' ? uid : undefined, redirectUri }, config.jwtSecret, { expiresIn: '10m' }), {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: config.produccion,
+    maxAge: 10 * 60 * 1000,
+    path: RUTA,
+  });
+
+  const parametros = new URLSearchParams({
+    client_id: config.google.clienteId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: ['openid', 'email', 'profile', ...(modo === 'gmail' ? [GMAIL_LECTURA] : [])].join(' '),
+    state: nonce,
+    ...(modo === 'gmail'
+      ? { access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true' }
+      : { prompt: 'select_account' }),
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${parametros}`);
+});
+
+rutasGoogle.get('/callback', async (req, res) => {
+  const volver = (parametro, texto) => res.redirect(`/?${parametro}=${encodeURIComponent(texto)}`);
+  let estado;
+  try {
+    estado = jwt.verify(req.cookies[COOKIE_ESTADO] ?? '', config.jwtSecret);
+  } catch {
+    return volver('errorGoogle', 'El acceso con Google caducó. Inténtalo de nuevo.');
+  }
+  res.clearCookie(COOKIE_ESTADO, { path: RUTA });
+  if (req.query.error) return volver('errorGoogle', req.query.error === 'access_denied' ? 'Cancelaste el acceso con Google.' : 'Google no permitió el acceso.');
+  if (typeof req.query.code !== 'string' || req.query.state !== estado.nonce) return volver('errorGoogle', 'La respuesta de Google no es válida. Inténtalo de nuevo.');
+
+  try {
+    const tokens = await pedirGoogle('https://oauth2.googleapis.com/token', formulario({
+      code: req.query.code,
+      client_id: config.google.clienteId,
+      client_secret: config.google.secreto,
+      redirect_uri: estado.redirectUri,
+      grant_type: 'authorization_code',
+    }));
+    const perfil = await pedirGoogle('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${tokens.access_token}` } });
+    if (!perfil.sub || !perfil.email) return volver('errorGoogle', 'Google no compartió tu correo.');
+    const email = perfil.email.toLowerCase();
+
+    if (estado.modo === 'gmail') {
+      const usuario = estado.uid && (await Usuario.findById(estado.uid));
+      if (!usuario) return volver('errorGoogle', 'Inicia sesión antes de vincular Gmail.');
+      const otro = await Usuario.findOne({ googleId: perfil.sub }).select('_id');
+      if (otro && !otro._id.equals(usuario._id)) return volver('errorGoogle', `La cuenta de Google ${email} ya está vinculada a otra cuenta de la app.`);
+      if (!String(tokens.scope ?? '').split(' ').includes(GMAIL_LECTURA)) return volver('errorGoogle', 'No marcaste el permiso para leer tus correos. Vuelve a vincular y marca la casilla de Gmail.');
+      if (!tokens.refresh_token) return volver('errorGoogle', 'Google no dio acceso permanente. Quita la app en myaccount.google.com/permissions y vuelve a vincular.');
+
+      usuario.googleId = perfil.sub;
+      usuario.gmail = { email, token: cifrar(tokens.refresh_token), activo: true, desde: new Date(), registrados: 0 };
+      await usuario.save();
+      accesos.delete(usuario.id);
+      return volver('google', 'gmail');
+    }
+
+    // Entrar: la cuenta vinculada a ese Google, o la que tenga ese mismo correo verificado, o una nueva.
+    let usuario = await Usuario.findOne({ googleId: perfil.sub });
+    let nueva = false;
+    if (!usuario && perfil.email_verified) {
+      usuario = await Usuario.findOne({ email });
+      if (usuario) {
+        usuario.googleId = perfil.sub;
+        await usuario.save();
+      }
+    }
+    if (!usuario) {
+      if (!perfil.email_verified) return volver('errorGoogle', 'Tu correo de Google no está verificado.');
+      usuario = await Usuario.create({ nombre: (perfil.name || email.split('@')[0]).trim().slice(0, 60), email, googleId: perfil.sub });
+      await Libro.create({ nombre: 'Personal', propietario: usuario._id });
+      nueva = true;
+    }
+    iniciarSesion(res, usuario);
+    return volver('google', nueva ? 'nueva' : 'entrar');
+  } catch (err) {
+    console.error('Google:', err.message);
+    return volver('errorGoogle', 'No se pudo completar el acceso con Google. Inténtalo de nuevo.');
+  }
+});
+
+// Revisa el correo ahora mismo, sin esperar a la próxima vuelta.
+rutasGoogle.post('/gmail/revisar', requiereSesion, async (req, res) => {
+  const usuario = await Usuario.findById(req.usuario.id);
+  if (!usuario.gmail?.token) throw new ErrorHttp(400, 'Primero vincula tu Gmail');
+  if (enCurso.has(usuario.id)) throw new ErrorHttp(409, 'Ya se está revisando tu correo. Espera unos segundos.');
+  const nuevos = await revisarUsuario(usuario);
+  res.json({ nuevos, usuario: await publico(await Usuario.findById(usuario._id)) });
+});
+
+// Pausa o reanuda la lectura sin desvincular.
+rutasGoogle.patch('/gmail', requiereSesion, async (req, res) => {
+  const usuario = await Usuario.findById(req.usuario.id);
+  if (!usuario.gmail?.token) throw new ErrorHttp(400, 'Primero vincula tu Gmail');
+  if (typeof req.body.activo !== 'boolean') throw new ErrorHttp(400, 'Datos inválidos');
+  usuario.gmail.activo = req.body.activo;
+  if (req.body.activo) usuario.gmail.error = undefined;
+  await usuario.save();
+  res.json({ usuario: await publico(usuario) });
+});
+
+// Deja de leer el correo y retira el permiso en Google. El acceso con Google a la app se mantiene.
+rutasGoogle.delete('/gmail', requiereSesion, async (req, res) => {
+  const usuario = await Usuario.findById(req.usuario.id);
+  const token = usuario.gmail?.token && descifrar(usuario.gmail.token);
+  if (token) pedirGoogle('https://oauth2.googleapis.com/revoke', formulario({ token })).catch(() => {});
+  usuario.gmail = undefined;
+  await usuario.save();
+  accesos.delete(usuario.id);
+  res.json({ usuario: await publico(usuario) });
+});
+
+// ---------- lectura de Gmail ----------
+
+// Accesos de una hora que da Google a partir del token guardado, recordados en memoria.
+const accesos = new Map();
+
+async function accesoGmail(usuario) {
+  const guardado = accesos.get(usuario.id);
+  if (guardado && guardado.hasta > Date.now()) return guardado.token;
+  const refresco = descifrar(usuario.gmail.token);
+  if (!refresco) throw new ErrorGoogle(400, 'invalid_grant');
+  const r = await pedirGoogle('https://oauth2.googleapis.com/token', formulario({
+    client_id: config.google.clienteId,
+    client_secret: config.google.secreto,
+    refresh_token: refresco,
+    grant_type: 'refresh_token',
+  }));
+  accesos.set(usuario.id, { token: r.access_token, hasta: Date.now() + (r.expires_in - 120) * 1000 });
+  return r.access_token;
+}
+
+// Palabras de avisos de compra y pago; los demás correos ni se abren.
+const FILTRO = '{category:purchases compra compraste consumo consumiste cargo pago pagaste yapeaste plin transferencia transferiste boleta factura recibo comprobante voucher pedido orden viaje suscripcion purchase receipt payment order invoice}';
+
+const base64url = (datos) => Buffer.from(datos.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+
+function cuerpos(parte, tipo, lista = []) {
+  if (parte.mimeType === tipo && parte.body?.data) lista.push(base64url(parte.body.data));
+  for (const hija of parte.parts ?? []) cuerpos(hija, tipo, lista);
+  return lista;
+}
+
+const ENTIDADES = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", aacute: 'á', eacute: 'é', iacute: 'í', oacute: 'ó', uacute: 'ú', ntilde: 'ñ', Aacute: 'Á', Eacute: 'É', Iacute: 'Í', Oacute: 'Ó', Uacute: 'Ú', Ntilde: 'Ñ', uuml: 'ü' };
+
+function htmlATexto(html) {
+  return html
+    .replace(/<(style|script|head)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d|table)>/gi, '\n')
+    .replace(/<\/t[dh]>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&#(x?)([0-9a-f]+);/gi, (_, hex, n) => String.fromCodePoint(parseInt(n, hex ? 16 : 10)))
+    .replace(/&([a-z]+);/gi, (todo, nombre) => ENTIDADES[nombre] ?? todo);
+}
+
+function leerMensaje(mensaje) {
+  const cabecera = (nombre) => mensaje.payload?.headers?.find((h) => h.name.toLowerCase() === nombre)?.value ?? '';
+  const plano = cuerpos(mensaje.payload ?? {}, 'text/plain').join('\n');
+  const texto = (plano.trim() ? plano : htmlATexto(cuerpos(mensaje.payload ?? {}, 'text/html').join('\n')))
+    .replace(/[ \t ]+/g, ' ')
+    .replace(/\s*\n\s*/g, '\n')
+    .trim()
+    .slice(0, 6000);
+  const recibido = new Date(Number(mensaje.internalDate) || Date.now());
+  return {
+    asunto: cabecera('subject').slice(0, 200),
+    remitente: cabecera('from').slice(0, 200),
+    fecha: new Intl.DateTimeFormat('en-CA', { timeZone: config.zona }).format(recibido),
+    texto: texto || mensaje.snippet || '',
+  };
+}
+
+// Sin IA: solo avisos claros de compra o pago con un importe en soles, dólares o euros.
+function gastoSinIa(correo) {
+  const todo = `${correo.asunto}\n${correo.texto}`;
+  if (!/(compra|consumo|pago|pagaste|cargo|yapeaste|transferencia|transferiste)/i.test(correo.asunto)) return null;
+  if (/(recibiste|te yapearon|te transfirieron|abono|dep[oó]sito|devoluci|reembolso|oferta|promo|descuento|recordatorio|vence)/i.test(correo.asunto)) return null;
+  const importe = /(S\/\.?|PEN|US\$|USD|\$|€|EUR)\s?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)\b/i.exec(todo);
+  if (!importe) return null;
+  let numero = importe[2];
+  const decimales = /[.,]\d{1,2}$/.exec(numero)?.[0] ?? '';
+  numero = numero.slice(0, numero.length - decimales.length).replace(/[.,]/g, '') + decimales.replace(',', '.');
+  const simbolo = importe[1].toUpperCase();
+  const moneda = simbolo.startsWith('S') || simbolo === 'PEN' ? 'PEN' : simbolo === '€' || simbolo === 'EUR' ? 'EUR' : 'USD';
+  const quien = correo.remitente.replace(/<.*>/, '').replace(/"/g, '').trim();
+  return { esGasto: true, monto: Number(numero), moneda, descripcion: `${quien ? `${quien}: ` : ''}${correo.asunto}`, categoria: 'Otros', fecha: correo.fecha };
+}
+
+const dias = (a, b) => Math.abs(new Date(`${a}T00:00:00Z`) - new Date(`${b}T00:00:00Z`)) / 86400000;
+
+// Convierte lo que dijo la IA (o el filtro sin IA) en datos para registrar, o null si no es un gasto.
+async function interpretar(correo, monedaLibro) {
+  const gasto = (await leerGastoDeCorreo(correo)) ?? gastoSinIa(correo);
+  if (!gasto?.esGasto) return null;
+  const monto = Number(gasto.monto);
+  if (!Number.isFinite(monto) || monto <= 0) return null;
+  const moneda = typeof gasto.moneda === 'string' && /^[A-Za-z]{3}$/.test(gasto.moneda) ? gasto.moneda.toUpperCase() : monedaLibro;
+  let descripcion = typeof gasto.descripcion === 'string' && gasto.descripcion.trim() ? gasto.descripcion.trim() : correo.asunto || 'Gasto por correo';
+  // El libro guarda una sola moneda: si el cobro fue en otra, se avisa en la descripción.
+  if (moneda !== monedaLibro) descripcion = `[${moneda}] ${descripcion}`;
+  // La fecha de la IA solo se acepta si cuadra con la del correo.
+  const fecha = typeof gasto.fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(gasto.fecha) && gasto.fecha <= correo.fecha && dias(gasto.fecha, correo.fecha) <= 3 ? gasto.fecha : correo.fecha;
+  return { tipo: 'gasto', monto, descripcion: descripcion.slice(0, 120), categoria: typeof gasto.categoria === 'string' ? gasto.categoria : 'Otros', fecha, pagado: true };
+}
+
+const enCurso = new Set();
+
+/** Lee los correos nuevos de una persona y registra los gastos. Devuelve cuántos registró. */
+export async function revisarUsuario(usuario) {
+  if (enCurso.has(usuario.id) || !usuario.gmail?.token || !googleDisponible()) return 0;
+  enCurso.add(usuario.id);
+  let nuevos = 0;
+  try {
+    const libro = libroActivo(usuario, await librosDe(usuario));
+    if (!libro) throw new Error('No tienes ningún libro donde registrar los gastos.');
+    const token = await accesoGmail(usuario);
+    const autorizacion = { headers: { Authorization: `Bearer ${token}` } };
+
+    // Desde la vinculación (como mucho una semana atrás), sin los correos que envió la propia persona.
+    const desde = Math.floor(Math.max(usuario.gmail.desde?.getTime() ?? 0, Date.now() - 7 * 86400000) / 1000);
+    const q = `after:${desde} -in:sent -in:drafts -in:chats ${FILTRO}`;
+    const lista = await pedirGoogle(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${new URLSearchParams({ q, maxResults: '50' })}`, autorizacion);
+    const ids = (lista.messages ?? []).map((m) => m.id);
+    const vistos = new Set((await CorreoVisto.find({ _id: { $in: ids.map((id) => `${usuario.id}:${id}`) } }).select('_id').lean()).map((v) => v._id));
+    // Los más antiguos primero, para que el orden de registro sea el de llegada.
+    const pendientes = ids.filter((id) => !vistos.has(`${usuario.id}:${id}`)).reverse().slice(0, MAX_CORREOS);
+
+    for (const id of pendientes) {
+      const mensaje = await pedirGoogle(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`, autorizacion);
+      const correo = leerMensaje(mensaje);
+      // Si la IA falla, el correo no se marca como visto y se vuelve a intentar en la próxima revisión.
+      const datos = await interpretar(correo, libro.moneda);
+      await CorreoVisto.updateOne({ _id: `${usuario.id}:${id}` }, { $setOnInsert: { visto: new Date() } }, { upsert: true });
+      if (!datos) continue;
+
+      const confirmacion = await registrarMovimiento(usuario, libro, datos, { correoId: id });
+      if (!confirmacion.startsWith('✅')) continue;
+      nuevos += 1;
+      if (usuario.whatsapp && whatsappConectado()) {
+        enviarANumero(usuario.whatsapp, { texto: `📧 *Desde tu correo* (${correo.asunto.slice(0, 80)})\n${confirmacion}` })
+          .catch((err) => console.error('Aviso de gasto por WhatsApp:', err.message));
+      }
+    }
+
+    await Usuario.updateOne({ _id: usuario._id }, { $set: { 'gmail.ultimaRevision': new Date() }, $unset: { 'gmail.error': 1 }, $inc: { 'gmail.registrados': nuevos } });
+  } catch (err) {
+    const permisoRetirado = err instanceof ErrorGoogle && (err.codigo === 'invalid_grant' || err.estado === 401 || err.estado === 403);
+    const motivo = permisoRetirado
+      ? 'Google retiró el permiso para leer tu correo. Vuelve a vincular Gmail.'
+      : err instanceof ErrorGoogle ? `Gmail respondió con un error (${err.estado}). Se reintentará solo.`
+      : err.message?.startsWith('No tienes') ? err.message
+      : `No se pudo consultar la IA: ${explicarError(err)}`;
+    console.error(`Gmail (${usuario.email}):`, err.message);
+    await Usuario.updateOne({ _id: usuario._id }, {
+      $set: { 'gmail.error': motivo, 'gmail.ultimaRevision': new Date(), ...(permisoRetirado && { 'gmail.activo': false }) },
+      $inc: { 'gmail.registrados': nuevos },
+    });
+    if (permisoRetirado) accesos.delete(usuario.id);
+  } finally {
+    enCurso.delete(usuario.id);
+  }
+  return nuevos;
+}
+
+let temporizador = null;
+let revisando = false;
+
+async function revisarTodos() {
+  if (revisando) return;
+  revisando = true;
+  try {
+    const usuarios = await Usuario.find({ 'gmail.activo': true, 'gmail.token': { $exists: true } }).limit(500);
+    for (const usuario of usuarios) await revisarUsuario(usuario);
+  } catch (err) {
+    console.error('Revisión de Gmail:', err.message);
+  } finally {
+    revisando = false;
+  }
+}
+
+// Revisa el correo de todos los que lo vincularon cada pocos minutos.
+export function iniciarRevisionGmail() {
+  if (!googleDisponible() || temporizador) return;
+  setTimeout(revisarTodos, 30_000);
+  temporizador = setInterval(revisarTodos, config.minutosGmail * 60_000);
+}
+
+export function pararRevisionGmail() {
+  clearInterval(temporizador);
+  temporizador = null;
+}
