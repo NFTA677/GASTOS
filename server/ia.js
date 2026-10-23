@@ -159,7 +159,9 @@ async function pedirAClaude(ajustes, { system, messages }) {
 }
 
 // La API de NVIDIA sigue el formato de «chat completions»: las instrucciones van como primer mensaje.
-async function pedirANvidia(ajustes, { system, messages }) {
+async function pedirANvidia(ajustes, { system, messages }, intento = 1, permitirSinRazonar = true) {
+  // Los Nemotron «piensan» antes de responder y pueden tardar más de un minuto: aquí no hace falta.
+  const sinRazonar = permitirSinRazonar && /nemotron/i.test(ajustes.modelo);
   let res;
   try {
     res = await fetch(`${NVIDIA_URL}/chat/completions`, {
@@ -169,14 +171,24 @@ async function pedirANvidia(ajustes, { system, messages }) {
         model: ajustes.modelo,
         max_tokens: 4096,
         temperature: 0.2,
-        messages: [...(system ? [{ role: 'system', content: system }] : []), ...messages],
+        messages: [...(system ? [{ role: 'system', content: `${sinRazonar ? '/no_think\n' : ''}${system}` }] : []), ...messages],
+        ...(sinRazonar && { chat_template_kwargs: { enable_thinking: false } }),
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(90_000),
     });
   } catch (err) {
-    throw new ErrorNvidia(0, err.name === 'TimeoutError' ? 'tiempo agotado' : err.message);
+    if (err.name === 'TimeoutError') throw new ErrorNvidia(0, 'tiempo agotado (el modelo tardó más de 90 segundos; prueba uno más rápido en Admin → IA)');
+    if (intento === 1) return pedirANvidia(ajustes, { system, messages }, 2, permitirSinRazonar);
+    throw new ErrorNvidia(0, err.message);
   }
   const cuerpo = await res.json().catch(() => null);
+  // Si el modelo no admite la opción de no razonar, se repite la petición sin ella.
+  if (res.status === 400 && sinRazonar) return pedirANvidia(ajustes, { system, messages }, intento, false);
+  // Saturación pasajera: un reintento tras una breve pausa.
+  if ([429, 500, 502, 503, 504].includes(res.status) && intento === 1) {
+    await new Promise((listo) => setTimeout(listo, 3000));
+    return pedirANvidia(ajustes, { system, messages }, 2, permitirSinRazonar);
+  }
   if (!res.ok) throw new ErrorNvidia(res.status, cuerpo?.detail ?? cuerpo?.error?.message ?? cuerpo?.title ?? '');
   return { texto: cuerpo?.choices?.[0]?.message?.content ?? '' };
 }
@@ -301,7 +313,10 @@ export async function preguntar(usuario, contexto, pregunta) {
   try {
     respuesta = await pedir(ajustes, { system: INSTRUCCIONES, messages: mensajes });
   } catch (err) {
-    console.error('IA:', explicarError(err), err.message);
+    const motivo = explicarError(err);
+    console.error('IA:', motivo, err.message);
+    // En la app se muestra el motivo; por WhatsApp basta con la indicación de los comandos.
+    if (contexto.canal === 'web') return soloTexto(`No pude consultar la IA. Motivo: ${motivo}`);
     return soloTexto('Ahora mismo no puedo consultar la IA. Escribe *menu* para usar los comandos.');
   }
   if (respuesta.rechazo) return soloTexto('No puedo ayudarte con esa pregunta. Escribe *menu* para ver lo que sí puedo hacer.');
