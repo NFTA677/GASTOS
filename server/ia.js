@@ -193,7 +193,44 @@ async function pedirANvidia(ajustes, { system, messages }, intento = 1, permitir
   return { texto: cuerpo?.choices?.[0]?.message?.content ?? '' };
 }
 
-const pedir = (ajustes, parametros) => (ajustes.proveedor === 'nvidia' ? pedirANvidia : pedirAClaude)(ajustes, parametros);
+// Modelos rápidos de NVIDIA que se prueban, en este orden, si el elegido no está habilitado en la cuenta.
+const RESPALDO_NVIDIA = [
+  'openai/gpt-oss-20b',
+  'nvidia/nemotron-nano-3-30b-a3b',
+  'meta/llama-3.3-70b-instruct',
+  'openai/gpt-oss-120b',
+  'meta/llama-3.1-70b-instruct',
+  'mistralai/mistral-small-24b-instruct',
+  ...MODELOS_NVIDIA_BASE,
+];
+
+// La lista de NVIDIA incluye modelos que la cuenta no puede usar (responden 404). Si pasa con el
+// elegido, se prueban otros y el primero que responda queda guardado como modelo de NVIDIA.
+async function pedirANvidiaConRespaldo(ajustes, parametros) {
+  try {
+    return { ...(await pedirANvidia(ajustes, parametros)), modelo: ajustes.modelo };
+  } catch (err) {
+    if (!(err instanceof ErrorNvidia && err.estado === 404)) throw err;
+    const disponibles = await modelosNvidia(ajustes.clave);
+    const candidatos = [...new Set(RESPALDO_NVIDIA)].filter((m) => m !== ajustes.modelo && disponibles.includes(m)).slice(0, 5);
+    for (const modelo of candidatos) {
+      try {
+        const respuesta = await pedirANvidia({ ...ajustes, modelo }, parametros);
+        const actual = { ...(await guardadoIa()) };
+        actual.modeloNvidia = modelo;
+        await Ajuste.findByIdAndUpdate('ia', { valor: actual }, { upsert: true });
+        ajustesEnMemoria = { hasta: 0, valor: null };
+        console.log(`IA: el modelo ${ajustes.modelo} no está habilitado; se usa ${modelo}.`);
+        return { ...respuesta, modelo };
+      } catch (otro) {
+        if (!(otro instanceof ErrorNvidia && otro.estado === 404)) throw otro;
+      }
+    }
+    throw err;
+  }
+}
+
+const pedir = (ajustes, parametros) => (ajustes.proveedor === 'nvidia' ? pedirANvidiaConRespaldo : pedirAClaude)(ajustes, parametros);
 
 // Adapta la salida a WhatsApp: sin el razonamiento interno de algunos modelos y con su formato de negrita.
 function paraWhatsapp(texto) {
@@ -338,7 +375,9 @@ export async function probarIa() {
   if (!ajustes.clave) return { ok: false, mensaje: `Falta la clave de ${proveedor}.` };
   try {
     const respuesta = await pedir(ajustes, { messages: [{ role: 'user', content: 'Responde solo con la palabra: funciona' }] });
-    return { ok: true, mensaje: `Conexión correcta con ${proveedor} (${ajustes.modelo}). Respuesta: «${paraWhatsapp(respuesta.texto).slice(0, 80)}»` };
+    const modelo = respuesta.modelo ?? ajustes.modelo;
+    const cambio = modelo !== ajustes.modelo ? ` El modelo ${ajustes.modelo} no está habilitado en tu cuenta, así que se cambió a ${modelo}.` : '';
+    return { ok: true, mensaje: `Conexión correcta con ${proveedor} (${modelo}).${cambio} Respuesta: «${paraWhatsapp(respuesta.texto).slice(0, 80)}»` };
   } catch (err) {
     return { ok: false, mensaje: explicarError(err) };
   }
