@@ -1169,6 +1169,42 @@ function pintarCuenta() {
     });
   };
 
+  const escanear = (ev) => {
+    ev.preventDefault();
+    const meses = ev.target.meses.value;
+    intentar(async () => {
+      const { mensaje, usuario } = await api('/auth/google/gmail/escanear', { method: 'POST', body: { meses } });
+      actualizar(usuario);
+      avisar(mensaje);
+    });
+  };
+  const recargarCuenta = () => intentar(async () => actualizar((await api('/auth/yo')).usuario));
+  const fechaDe = (f) => new Date(f).toLocaleDateString('es', { timeZone: 'UTC' });
+  const e = g?.escaneo;
+  const textoEscaneo = e && (e.estado === 'en curso'
+    ? `⏳ Revisando tus correos del ${fechaDe(e.desde)} al ${fechaDe(e.hasta)}: ${e.revisados} revisados, ${e.registrados} gastos registrados hasta ahora.`
+    : e.estado === 'error'
+      ? `La última revisión de correos anteriores falló: ${e.error}`
+      : `Última revisión de correos anteriores (del ${fechaDe(e.desde)} al ${fechaDe(e.hasta)}): ${e.revisados} correos revisados, ${e.registrados} gastos registrados${e.duplicados ? `, ${e.duplicados} ya estaban anotados` : ''}.${e.quedan ? ' Quedan más correos en ese periodo: vuelve a escanear para seguir.' : ''}`);
+
+  const seccionEscaneo = g && h('div', { class: 'escaneo' },
+    h('h4', null, 'Correos anteriores'),
+    h('p', { class: 'tenue' }, 'Revisa los avisos de compras y pagos que ya tienes en tu Gmail y regístralos como gastos. Los que ya anotaste (mismo monto y fecha) no se duplican. También puedes pedírselo al Asistente IA.'),
+    textoEscaneo && h('p', { class: e.estado === 'error' ? 'error' : null }, textoEscaneo),
+    e?.estado === 'en curso'
+      ? h('button', { type: 'button', onclick: recargarCuenta }, 'Actualizar progreso')
+      : h('form', { class: 'form-linea', onsubmit: escanear },
+          h('label', null, 'Periodo',
+            h('select', { name: 'meses' },
+              h('option', { value: '1' }, 'Último mes'),
+              h('option', { value: '3' }, 'Últimos 3 meses'),
+              h('option', { value: '6' }, 'Últimos 6 meses'),
+              h('option', { value: '12' }, 'Último año'),
+            )),
+          h('button', { class: 'primario' }, 'Escanear correos'),
+        ),
+  );
+
   const seccionGmail = googleDisponible && h('section', { class: 'panel' },
     h('header', null, h('h3', null, 'Gastos desde tu Gmail'), g && h('span', { class: 'tenue' }, g.email)),
     g
@@ -1186,6 +1222,7 @@ function pintarCuenta() {
             h('button', { type: 'button', onclick: () => pausar(!g.activo) }, g.activo ? 'Pausar' : 'Reanudar'),
             h('button', { type: 'button', class: 'peligro', onclick: desvincular }, 'Desvincular'),
           ),
+          seccionEscaneo,
         ]
       : [
           h('p', null, 'Vincula tu cuenta de Google para que el bot lea los avisos de compra y pago que te llegan por correo y los registre solo como gastos en tu libro.'),
@@ -1226,7 +1263,10 @@ let esperandoIa = false;
 
 const SUGERENCIAS = [
   '¿Cuánto gasté este mes?',
+  '¿Cuánto gasté el mes pasado?',
+  'Compara mis gastos de los últimos 6 meses',
   'Analiza mis gastos del correo',
+  'Escanea mis correos de los últimos 3 meses',
   '¿En qué categoría gasto más?',
   '¿Qué pagos tengo pendientes?',
   'Mándame el resumen del mes por WhatsApp',

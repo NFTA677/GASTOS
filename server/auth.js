@@ -37,7 +37,7 @@ export const publico = async (u) => ({
   tienePassword: Boolean(u.passwordHash),
   google: Boolean(u.googleId),
   gmail: u.gmail?.token
-    ? { email: u.gmail.email, activo: u.gmail.activo, desde: u.gmail.desde, ultimaRevision: u.gmail.ultimaRevision ?? null, registrados: u.gmail.registrados ?? 0, error: u.gmail.error ?? '' }
+    ? { email: u.gmail.email, activo: u.gmail.activo, desde: u.gmail.desde, ultimaRevision: u.gmail.ultimaRevision ?? null, registrados: u.gmail.registrados ?? 0, error: u.gmail.error ?? '', escaneo: u.gmail.escaneo?.estado ? u.gmail.escaneo : null }
     : null,
 });
 

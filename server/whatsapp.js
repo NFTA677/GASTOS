@@ -15,8 +15,8 @@ import makeWASocket, {
 } from 'baileys';
 import QRCode from 'qrcode';
 import { SesionWa, Usuario } from './models.js';
-import { responder, estadoDeCuenta, contextoParaIa, ejecutarAcciones, librosDe, textoMenu } from './bot.js';
-import { iaDisponible, preguntar } from './ia.js';
+import { responder, estadoDeCuenta, conversar, ejecutarAcciones, librosDe, textoMenu } from './bot.js';
+import { iaDisponible } from './ia.js';
 
 // Estado visible para el panel del administrador.
 export const wa = { estado: 'desconectado', qr: null, numero: null, aviso: '' };
@@ -314,8 +314,7 @@ async function atender(sock, mensaje) {
   const pregunta = conPrefijo ? texto.slice(conPrefijo[0].length).trim() : texto;
 
   if (ia.disponible && pregunta) {
-    const contexto = await contextoParaIa(usuario);
-    const respuesta = contexto && (await preguntar(usuario, contexto, pregunta));
+    const respuesta = await conversar(usuario, pregunta);
     if (respuesta) {
       // Lo que la IA propone hacer (registrar, PDF, deshacer) se valida y ejecuta aquí, no en el modelo.
       const { textos, pdfs } = await ejecutarAcciones(usuario, respuesta.acciones);

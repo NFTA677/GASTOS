@@ -4,8 +4,8 @@ import { Usuario, Libro, Movimiento } from './models.js';
 import { ErrorHttp, texto } from './errores.js';
 import rateLimit from 'express-rate-limit';
 import { generarInforme } from './informe.js';
-import { informePeriodo, contextoParaIa, ejecutarAcciones } from './bot.js';
-import { iaDisponible, preguntar } from './ia.js';
+import { informePeriodo, conversar, ejecutarAcciones } from './bot.js';
+import { iaDisponible } from './ia.js';
 import { whatsappConectado, enviarANumero } from './whatsapp.js';
 import { correoDisponible, enviarCorreo, metodoCorreo, sinFormatoWhatsapp } from './correo.js';
 import { esAdmin } from './auth.js';
@@ -511,10 +511,8 @@ rutasApi.post('/ia/chat', async (req, res) => {
   if (!(await iaDisponible()).disponible) throw new ErrorHttp(503, 'La IA no está activada. El administrador puede activarla en Admin → IA.');
 
   const puedeRecibirWhatsapp = recibeWhatsapp(usuario);
-  const contexto = await contextoParaIa(usuario, { libroId, canal: 'web', puedeRecibirWhatsapp });
-  if (!contexto) throw new ErrorHttp(400, 'Primero crea un libro.');
-  const respuesta = await preguntar(usuario, contexto, mensaje);
-  if (!respuesta) throw new ErrorHttp(503, 'La IA no está disponible ahora mismo.');
+  const respuesta = await conversar(usuario, mensaje, { libroId, canal: 'web', puedeRecibirWhatsapp });
+  if (!respuesta) throw new ErrorHttp(503, 'La IA no está disponible ahora mismo, o aún no tienes ningún libro.');
 
   const { textos, pdfs } = await ejecutarAcciones(usuario, respuesta.acciones, { libroId });
   let contestacion = [respuesta.texto, ...textos].filter(Boolean).join('\n\n');

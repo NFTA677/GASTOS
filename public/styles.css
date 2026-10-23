@@ -454,3 +454,5 @@ dialog h2 { margin-bottom: 1rem; }
 .chat-form { display: flex; gap: .5rem; }
 .chat-form input { flex: 1; min-width: 0; }
 .chat-form button { flex: none; }
+.escaneo { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--linea); }
+.escaneo h4 { margin: 0 0 .4rem; }

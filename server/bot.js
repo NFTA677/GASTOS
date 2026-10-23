@@ -2,6 +2,7 @@ import { PassThrough } from 'node:stream';
 import { config } from './config.js';
 import { Libro, Movimiento } from './models.js';
 import { generarInforme, formateador } from './informe.js';
+import { preguntar } from './ia.js';
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
@@ -412,16 +413,69 @@ async function libroParaIa(usuario, libroId) {
   return libros.find((l) => libroId && String(l._id) === String(libroId)) ?? libroActivo(usuario, libros);
 }
 
+const corto = (m) => ({ fecha: aTexto(m.fecha), tipo: m.tipo, descripcion: m.descripcion, categoria: m.categoria, monto: m.monto, pagado: m.pagado, ...(m.correoId && { desdeCorreo: true }) });
+const redondear = (n) => Math.round(n * 100) / 100;
+
+// Totales mes a mes (24 meses atrás y 12 adelante, donde hay pagos programados): ingresos, gastos,
+// gastos por categoría y cuánto llegó por correo.
+async function resumenHistorico(libro, hoy) {
+  const desde = aFecha(`${moverMes(hoy.slice(0, 7), -23)}-01`);
+  const [grupos, primero] = await Promise.all([
+    Movimiento.aggregate([
+      { $match: { libro: libro._id, fecha: { $gte: desde, $lt: aFecha(`${moverMes(hoy.slice(0, 7), 13)}-01`) } } },
+      {
+        $group: {
+          _id: {
+            mes: { $dateToString: { format: '%Y-%m', date: '$fecha' } },
+            tipo: '$tipo',
+            categoria: '$categoria',
+            correo: { $toBool: { $ifNull: ['$correoId', false] } },
+          },
+          total: { $sum: '$monto' },
+          cantidad: { $sum: 1 },
+        },
+      },
+    ]),
+    Movimiento.findOne({ libro: libro._id }).sort('fecha').select('fecha').lean(),
+  ]);
+  const meses = new Map();
+  for (const { _id: g, total, cantidad } of grupos) {
+    const m = meses.get(g.mes) ?? { mes: g.mes, ingresos: 0, gastos: 0, movimientos: 0, gastosDesdeCorreo: 0, gastosPorCategoria: {} };
+    m.movimientos += cantidad;
+    if (g.tipo === 'ingreso') m.ingresos += total;
+    else {
+      m.gastos += total;
+      m.gastosPorCategoria[g.categoria] = (m.gastosPorCategoria[g.categoria] ?? 0) + total;
+      if (g.correo) m.gastosDesdeCorreo += total;
+    }
+    meses.set(g.mes, m);
+  }
+  return {
+    primerMovimiento: primero ? aTexto(primero.fecha) : null,
+    meses: [...meses.values()].sort((a, b) => a.mes.localeCompare(b.mes)).map((m) => ({
+      ...m,
+      ingresos: redondear(m.ingresos),
+      gastos: redondear(m.gastos),
+      balance: redondear(m.ingresos - m.gastos),
+      gastosDesdeCorreo: redondear(m.gastosDesdeCorreo),
+      gastosPorCategoria: Object.fromEntries(Object.entries(m.gastosPorCategoria).map(([c, t]) => [c, redondear(t)]).sort((a, b) => b[1] - a[1])),
+    })),
+  };
+}
+
 // Contexto compacto para la IA: totales y movimientos del libro activo, más los gastos llegados por correo.
 // «canal» es "whatsapp" o "web"; desde la web la IA puede pedir que su respuesta se envíe por WhatsApp.
 export async function contextoParaIa(usuario, { libroId, canal = 'whatsapp', puedeRecibirWhatsapp = false } = {}) {
   const libro = await libroParaIa(usuario, libroId);
   if (!libro) return null;
   const d = await datosDe(libro);
-  const corto = (m) => ({ fecha: aTexto(m.fecha), tipo: m.tipo, descripcion: m.descripcion, categoria: m.categoria, monto: m.monto, pagado: m.pagado, ...(m.correoId && { desdeCorreo: true }) });
-  const delCorreo = usuario.gmail?.token
-    ? await Movimiento.find({ libro: libro._id, correoId: { $exists: true }, fecha: { $gte: aFecha(sumarDias(d.hoy, -90)) } }).sort('-fecha').limit(150).lean()
-    : [];
+  const [delCorreo, historico] = await Promise.all([
+    usuario.gmail?.token
+      ? Movimiento.find({ libro: libro._id, correoId: { $exists: true }, fecha: { $gte: aFecha(sumarDias(d.hoy, -90)) } }).sort('-fecha').limit(150).lean()
+      : [],
+    resumenHistorico(libro, d.hoy),
+  ]);
+  const escaneo = usuario.gmail?.escaneo?.estado ? usuario.gmail.escaneo : null;
   return {
     canal,
     ...(canal === 'web' && { puedeRecibirWhatsapp }),
@@ -431,13 +485,56 @@ export async function contextoParaIa(usuario, { libroId, canal = 'whatsapp', pue
     hoy: d.hoy,
     saludoPorLaHora: saludoSegunHora(),
     correo: usuario.gmail?.token
-      ? { vinculado: true, cuenta: usuario.gmail.email, activo: usuario.gmail.activo, desde: aTexto(usuario.gmail.desde ?? new Date()), gastosUltimos90Dias: delCorreo.map(corto) }
+      ? {
+          vinculado: true,
+          cuenta: usuario.gmail.email,
+          activo: usuario.gmail.activo,
+          desde: aTexto(usuario.gmail.desde ?? new Date()),
+          ...(escaneo && {
+            ultimoEscaneo: { estado: escaneo.estado, desde: aTexto(escaneo.desde), hasta: aTexto(escaneo.hasta), revisados: escaneo.revisados, registrados: escaneo.registrados, quedanMas: escaneo.quedan },
+          }),
+          gastosUltimos90Dias: delCorreo.map(corto),
+        }
       : { vinculado: false },
     mesActual: { mes: d.mes, totales: d.totalMes, movimientos: d.delMes.slice(0, 200).map(corto) },
     mesSiguiente: { mes: d.proximo, totales: d.totalProximo, movimientos: d.delProximo.slice(0, 100).map(corto) },
     pendientesVencidosYProximos30Dias: d.pendientes.map(corto),
     totalesDelAnio: { anio: d.anio, ...d.totalAnio },
+    resumenMensual: historico,
   };
+}
+
+const fechaValida = (f) => typeof f === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f) && !Number.isNaN(aFecha(f).getTime());
+
+/**
+ * Conversa con la IA sobre las finanzas del usuario, por WhatsApp o desde la app.
+ * Si la IA necesita el detalle de un periodo que no tiene (acción «consultar»), se le dan esos
+ * movimientos y se le vuelve a preguntar una vez. Devuelve { texto, acciones } o null.
+ */
+export async function conversar(usuario, pregunta, { libroId, canal = 'whatsapp', puedeRecibirWhatsapp = false } = {}) {
+  const contexto = await contextoParaIa(usuario, { libroId, canal, puedeRecibirWhatsapp });
+  if (!contexto) return null;
+  const respuesta = await preguntar(usuario, contexto, pregunta);
+  const consulta = respuesta?.acciones.find((a) => a?.tipo === 'consultar');
+  if (!consulta) return respuesta;
+
+  const libro = await libroParaIa(usuario, libroId);
+  const [mesDesde, mesHasta] = rangoMes(contexto.hoy.slice(0, 7));
+  let desde = fechaValida(consulta.desde) ? aFecha(consulta.desde) : mesDesde;
+  let hasta = fechaValida(consulta.hasta) ? aFecha(consulta.hasta) : mesHasta;
+  if (hasta < desde) [desde, hasta] = [hasta, desde];
+  if (hasta - desde > 3 * 366 * 86400000) desde = new Date(hasta.getTime() - 3 * 366 * 86400000);
+  const movimientos = await Movimiento.find({ libro: libro._id, fecha: { $gte: desde, $lte: hasta } }).sort({ fecha: 1, createdAt: 1 }).limit(400).lean();
+  contexto.periodoConsultado = {
+    desde: aTexto(desde),
+    hasta: aTexto(hasta),
+    totales: totales(movimientos),
+    movimientos: movimientos.map(corto),
+    ...(movimientos.length === 400 && { aviso: 'Solo se incluyen los primeros 400 movimientos del periodo.' }),
+  };
+  const segunda = await preguntar(usuario, contexto, `Ya tienes en «periodoConsultado» los movimientos que pediste. Responde ahora a mi pregunta: ${pregunta}`);
+  if (segunda) segunda.acciones = segunda.acciones.filter((a) => a?.tipo !== 'consultar');
+  return segunda;
 }
 
 /**
@@ -459,11 +556,14 @@ export async function ejecutarAcciones(usuario, acciones, { libroId } = {}) {
     } else if (accion?.tipo === 'deshacer') {
       textos.push(await deshacerUltimo(usuario));
     } else if (accion?.tipo === 'pdf' && pdfs.length < 2) {
-      const valida = (f) => typeof f === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f) && !Number.isNaN(aFecha(f).getTime());
       const [mesDesde, mesHasta] = rangoMes(hoyLocal().slice(0, 7));
-      const desde = valida(accion.desde) ? aFecha(accion.desde) : mesDesde;
-      const hasta = valida(accion.hasta) ? aFecha(accion.hasta) : mesHasta;
+      const desde = fechaValida(accion.desde) ? aFecha(accion.desde) : mesDesde;
+      const hasta = fechaValida(accion.hasta) ? aFecha(accion.hasta) : mesHasta;
       if (hasta >= desde && hasta - desde <= 3 * 366 * 86400000) pdfs.push(await informePeriodo(libro, desde, hasta));
+    } else if (accion?.tipo === 'escanearCorreo') {
+      // Se carga al usarlo: el módulo de Google depende de este.
+      const { iniciarEscaneo } = await import('./google.js');
+      textos.push(await iniciarEscaneo(usuario, accion.desde, accion.hasta));
     }
   }
   return { textos, pdfs };

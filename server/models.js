@@ -22,6 +22,20 @@ const usuarioSchema = new Schema(
       ultimaRevision: Date,
       registrados: { type: Number, default: 0 },
       error: String,
+      // Último escaneo de correos anteriores (pedido desde la app o el chat).
+      escaneo: {
+        estado: { type: String, enum: ['en curso', 'terminado', 'error'] },
+        desde: Date,
+        hasta: Date,
+        revisados: Number,
+        registrados: Number,
+        duplicados: Number,
+        // Había más correos de los que se revisaron en esa vuelta.
+        quedan: Boolean,
+        inicio: Date,
+        fin: Date,
+        error: String,
+      },
     },
     // Solo dígitos con código de país (51987654321). El bot lo usa para saber quién escribe y a quién enviar.
     whatsapp: { type: String, match: /^\d{10,15}$/ },

@@ -2,11 +2,11 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { randomBytes } from 'node:crypto';
 import { config } from './config.js';
-import { Usuario, Libro, CorreoVisto } from './models.js';
+import { Usuario, Libro, Movimiento, CorreoVisto } from './models.js';
 import { ErrorHttp } from './errores.js';
 import { iniciarSesion, idDeSesion, publico, requiereSesion } from './auth.js';
 import { cifrar, descifrar, leerGastoDeCorreo, explicarError } from './ia.js';
-import { librosDe, libroActivo, registrarMovimiento } from './bot.js';
+import { librosDe, libroActivo, registrarMovimiento, hoyLocal } from './bot.js';
 import { whatsappConectado, enviarANumero } from './whatsapp.js';
 
 const GMAIL_LECTURA = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -149,6 +149,16 @@ rutasGoogle.post('/gmail/revisar', requiereSesion, async (req, res) => {
   res.json({ nuevos, usuario: await publico(await Usuario.findById(usuario._id)) });
 });
 
+// Revisa los correos de los últimos meses (1, 3, 6 o 12) y registra los gastos que encuentre.
+rutasGoogle.post('/gmail/escanear', requiereSesion, async (req, res) => {
+  const usuario = await Usuario.findById(req.usuario.id);
+  if (!usuario.gmail?.token) throw new ErrorHttp(400, 'Primero vincula tu Gmail');
+  const meses = [1, 3, 6, 12].includes(Number(req.body.meses)) ? Number(req.body.meses) : 1;
+  const desde = sumarDias(hoyLocal(), -Math.round(meses * 30.5));
+  const mensaje = await iniciarEscaneo(usuario, desde);
+  res.json({ mensaje, usuario: await publico(await Usuario.findById(usuario._id)) });
+});
+
 // Pausa o reanuda la lectura sin desvincular.
 rutasGoogle.patch('/gmail', requiereSesion, async (req, res) => {
   const usuario = await Usuario.findById(req.usuario.id);
@@ -265,63 +275,168 @@ async function interpretar(correo, monedaLibro) {
 }
 
 const enCurso = new Set();
+const DIA = 86400000;
+// Como mucho estos correos en cada escaneo de meses anteriores (se puede repetir para seguir).
+const MAX_ESCANEO = 150;
+
+const sumarDias = (texto, n) => new Date(new Date(`${texto}T00:00:00Z`).getTime() + n * DIA).toISOString().slice(0, 10);
+const fechaCorta = (texto) => new Date(`${texto}T00:00:00Z`).toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+// Ids de los correos que cumplen la búsqueda, hasta «max», recorriendo las páginas de Gmail.
+async function buscarCorreos(autorizacion, q, max) {
+  const ids = [];
+  let pagina;
+  do {
+    const parametros = new URLSearchParams({ q, maxResults: '100', ...(pagina && { pageToken: pagina }) });
+    const r = await pedirGoogle(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${parametros}`, autorizacion);
+    ids.push(...(r.messages ?? []).map((m) => m.id));
+    pagina = r.nextPageToken;
+  } while (pagina && ids.length < max);
+  return ids.slice(0, max);
+}
+
+// Un gasto igual (mismo monto, un día arriba o abajo) ya anotado, por ejemplo a mano: no se duplica.
+async function yaRegistrado(libro, datos) {
+  const fecha = new Date(`${datos.fecha}T00:00:00Z`).getTime();
+  return Movimiento.exists({
+    libro: libro._id,
+    tipo: 'gasto',
+    monto: Math.round(datos.monto * 100) / 100,
+    fecha: { $gte: new Date(fecha - DIA), $lte: new Date(fecha + DIA) },
+  });
+}
+
+/**
+ * Revisa los correos que cumplen «q» y registra los gastos, los más antiguos primero.
+ * Va anotando en «resultado» { revisados, registrados, duplicados, quedan }: así se sabe lo hecho aunque falle a mitad.
+ */
+async function procesarCorreos(usuario, libro, autorizacion, q, resultado, { maxCorreos, maxBuscar, alRegistrar, alAvanzar }) {
+  const ids = await buscarCorreos(autorizacion, q, maxBuscar);
+  const vistos = new Set((await CorreoVisto.find({ _id: { $in: ids.map((id) => `${usuario.id}:${id}`) } }).select('_id').lean()).map((v) => v._id));
+  const pendientes = ids.filter((id) => !vistos.has(`${usuario.id}:${id}`)).reverse();
+  resultado.quedan = pendientes.length > maxCorreos;
+
+  for (const id of pendientes.slice(0, maxCorreos)) {
+    const correo = leerMensaje(await pedirGoogle(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`, autorizacion));
+    // Si la IA falla, el correo no se marca como visto y se vuelve a intentar en la próxima revisión.
+    const datos = await interpretar(correo, libro.moneda);
+    await CorreoVisto.updateOne({ _id: `${usuario.id}:${id}` }, { $setOnInsert: { visto: new Date() } }, { upsert: true });
+    resultado.revisados += 1;
+    if (datos) {
+      if (await yaRegistrado(libro, datos)) {
+        resultado.duplicados += 1;
+      } else {
+        const confirmacion = await registrarMovimiento(usuario, libro, datos, { correoId: id });
+        if (confirmacion.startsWith('✅')) {
+          resultado.registrados += 1;
+          alRegistrar?.(confirmacion, correo);
+        }
+      }
+    }
+    if (resultado.revisados % 10 === 0) await alAvanzar?.();
+  }
+}
+
+function avisarPorWhatsapp(usuario, texto) {
+  if (!usuario.whatsapp || !whatsappConectado()) return;
+  enviarANumero(usuario.whatsapp, { texto }).catch((err) => console.error('Aviso de Gmail por WhatsApp:', err.message));
+}
+
+// Explicación de un fallo al leer el correo, y si Google retiró el permiso.
+function motivoDeError(err) {
+  const permisoRetirado = err instanceof ErrorGoogle && (err.codigo === 'invalid_grant' || err.estado === 401 || err.estado === 403);
+  const motivo = permisoRetirado
+    ? 'Google retiró el permiso para leer tu correo. Vuelve a vincular Gmail.'
+    : err instanceof ErrorGoogle ? `Gmail respondió con un error (${err.estado}). Se reintentará solo.`
+    : err.message?.startsWith('No tienes') ? err.message
+    : `No se pudo consultar la IA: ${explicarError(err)}`;
+  return { motivo, permisoRetirado };
+}
+
+async function prepararLectura(usuario) {
+  const libro = libroActivo(usuario, await librosDe(usuario));
+  if (!libro) throw new Error('No tienes ningún libro donde registrar los gastos.');
+  return { libro, autorizacion: { headers: { Authorization: `Bearer ${await accesoGmail(usuario)}` } } };
+}
+
+const BUSQUEDA = `-in:sent -in:drafts -in:chats ${FILTRO}`;
 
 /** Lee los correos nuevos de una persona y registra los gastos. Devuelve cuántos registró. */
 export async function revisarUsuario(usuario) {
   if (enCurso.has(usuario.id) || !usuario.gmail?.token || !googleDisponible()) return 0;
   enCurso.add(usuario.id);
-  let nuevos = 0;
+  const resultado = { revisados: 0, registrados: 0, duplicados: 0, quedan: false };
   try {
-    const libro = libroActivo(usuario, await librosDe(usuario));
-    if (!libro) throw new Error('No tienes ningún libro donde registrar los gastos.');
-    const token = await accesoGmail(usuario);
-    const autorizacion = { headers: { Authorization: `Bearer ${token}` } };
-
+    const { libro, autorizacion } = await prepararLectura(usuario);
     // Desde la vinculación (como mucho una semana atrás), sin los correos que envió la propia persona.
-    const desde = Math.floor(Math.max(usuario.gmail.desde?.getTime() ?? 0, Date.now() - 7 * 86400000) / 1000);
-    const q = `after:${desde} -in:sent -in:drafts -in:chats ${FILTRO}`;
-    const lista = await pedirGoogle(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${new URLSearchParams({ q, maxResults: '50' })}`, autorizacion);
-    const ids = (lista.messages ?? []).map((m) => m.id);
-    const vistos = new Set((await CorreoVisto.find({ _id: { $in: ids.map((id) => `${usuario.id}:${id}`) } }).select('_id').lean()).map((v) => v._id));
-    // Los más antiguos primero, para que el orden de registro sea el de llegada.
-    const pendientes = ids.filter((id) => !vistos.has(`${usuario.id}:${id}`)).reverse().slice(0, MAX_CORREOS);
-
-    for (const id of pendientes) {
-      const mensaje = await pedirGoogle(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`, autorizacion);
-      const correo = leerMensaje(mensaje);
-      // Si la IA falla, el correo no se marca como visto y se vuelve a intentar en la próxima revisión.
-      const datos = await interpretar(correo, libro.moneda);
-      await CorreoVisto.updateOne({ _id: `${usuario.id}:${id}` }, { $setOnInsert: { visto: new Date() } }, { upsert: true });
-      if (!datos) continue;
-
-      const confirmacion = await registrarMovimiento(usuario, libro, datos, { correoId: id });
-      if (!confirmacion.startsWith('✅')) continue;
-      nuevos += 1;
-      if (usuario.whatsapp && whatsappConectado()) {
-        enviarANumero(usuario.whatsapp, { texto: `📧 *Desde tu correo* (${correo.asunto.slice(0, 80)})\n${confirmacion}` })
-          .catch((err) => console.error('Aviso de gasto por WhatsApp:', err.message));
-      }
-    }
-
-    await Usuario.updateOne({ _id: usuario._id }, { $set: { 'gmail.ultimaRevision': new Date() }, $unset: { 'gmail.error': 1 }, $inc: { 'gmail.registrados': nuevos } });
+    const desde = Math.floor(Math.max(usuario.gmail.desde?.getTime() ?? 0, Date.now() - 7 * DIA) / 1000);
+    await procesarCorreos(usuario, libro, autorizacion, `after:${desde} ${BUSQUEDA}`, resultado, {
+      maxCorreos: MAX_CORREOS,
+      maxBuscar: 100,
+      alRegistrar: (confirmacion, correo) => avisarPorWhatsapp(usuario, `📧 *Desde tu correo* (${correo.asunto.slice(0, 80)})\n${confirmacion}`),
+    });
+    await Usuario.updateOne({ _id: usuario._id }, { $set: { 'gmail.ultimaRevision': new Date() }, $unset: { 'gmail.error': 1 }, $inc: { 'gmail.registrados': resultado.registrados } });
   } catch (err) {
-    const permisoRetirado = err instanceof ErrorGoogle && (err.codigo === 'invalid_grant' || err.estado === 401 || err.estado === 403);
-    const motivo = permisoRetirado
-      ? 'Google retiró el permiso para leer tu correo. Vuelve a vincular Gmail.'
-      : err instanceof ErrorGoogle ? `Gmail respondió con un error (${err.estado}). Se reintentará solo.`
-      : err.message?.startsWith('No tienes') ? err.message
-      : `No se pudo consultar la IA: ${explicarError(err)}`;
+    const { motivo, permisoRetirado } = motivoDeError(err);
     console.error(`Gmail (${usuario.email}):`, err.message);
     await Usuario.updateOne({ _id: usuario._id }, {
       $set: { 'gmail.error': motivo, 'gmail.ultimaRevision': new Date(), ...(permisoRetirado && { 'gmail.activo': false }) },
-      $inc: { 'gmail.registrados': nuevos },
+      $inc: { 'gmail.registrados': resultado.registrados },
     });
     if (permisoRetirado) accesos.delete(usuario.id);
   } finally {
     enCurso.delete(usuario.id);
   }
-  return nuevos;
+  return resultado.registrados;
 }
+
+/**
+ * Empieza a revisar en segundo plano los correos de un periodo pasado (como mucho un año atrás).
+ * Devuelve el texto para la persona; el resultado llega por WhatsApp y se ve en «Mi cuenta».
+ */
+export async function iniciarEscaneo(usuario, desdeTexto, hastaTexto) {
+  if (!usuario.gmail?.token) return 'Primero vincula tu Gmail en «Mi cuenta» de la app.';
+  if (!googleDisponible()) return 'La lectura de Gmail no está configurada en el servidor.';
+  if (enCurso.has(usuario.id)) return '⏳ Ya estoy revisando tu correo. Te aviso cuando termine.';
+
+  const hoy = hoyLocal();
+  const valida = (t) => typeof t === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(t) && !Number.isNaN(new Date(`${t}T00:00:00Z`).getTime());
+  let desde = valida(desdeTexto) ? desdeTexto : sumarDias(hoy, -30);
+  const hasta = valida(hastaTexto) && hastaTexto <= hoy ? hastaTexto : hoy;
+  if (desde < sumarDias(hoy, -366)) desde = sumarDias(hoy, -366);
+  if (desde > hasta) return 'Las fechas para revisar el correo no son válidas.';
+
+  enCurso.add(usuario.id);
+  const estado = { estado: 'en curso', desde: new Date(desde), hasta: new Date(hasta), revisados: 0, registrados: 0, duplicados: 0, quedan: false, inicio: new Date() };
+  const guardar = () => Usuario.updateOne({ _id: usuario._id }, { $set: { 'gmail.escaneo': estado } });
+  await guardar();
+
+  (async () => {
+    try {
+      const { libro, autorizacion } = await prepararLectura(usuario);
+      // Gmail interpreta estas fechas en la zona de la cuenta; «before» no incluye ese día.
+      const q = `after:${desde.replace(/-/g, '/')} before:${sumarDias(hasta, 1).replace(/-/g, '/')} ${BUSQUEDA}`;
+      await procesarCorreos(usuario, libro, autorizacion, q, estado, { maxCorreos: MAX_ESCANEO, maxBuscar: 500, alAvanzar: guardar });
+      Object.assign(estado, { estado: 'terminado', fin: new Date() });
+      avisarPorWhatsapp(usuario, [
+        `📧 *Revisión de tu correo terminada* (del ${fechaCorta(desde)} al ${fechaCorta(hasta)})`,
+        `Revisé ${estado.revisados} correos y registré *${estado.registrados} gastos*${estado.duplicados ? `; ${estado.duplicados} ya estaban anotados` : ''}.`,
+        ...(estado.quedan ? ['Hay más correos en ese periodo: pídeme revisarlo otra vez para seguir.'] : []),
+        'Pregúntame por cualquier mes, por ejemplo: «ia ¿cuánto gasté en septiembre?».',
+      ].join('\n'));
+    } catch (err) {
+      console.error(`Escaneo de Gmail (${usuario.email}):`, err.message);
+      Object.assign(estado, { estado: 'error', fin: new Date(), error: motivoDeError(err).motivo });
+    } finally {
+      await guardar().catch(() => {});
+      await Usuario.updateOne({ _id: usuario._id }, { $inc: { 'gmail.registrados': estado.registrados } }).catch(() => {});
+      enCurso.delete(usuario.id);
+    }
+  })();
+
+  return `📧 Empecé a revisar tus correos del ${fechaCorta(desde)} al ${fechaCorta(hasta)} (hasta ${MAX_ESCANEO} avisos de compra o pago por vuelta). Puede tardar varios minutos; ${usuario.whatsapp && whatsappConectado() ? 'te aviso por WhatsApp cuando termine' : 'verás el resultado en «Mi cuenta»'}.`;
+}
+
 
 let temporizador = null;
 let revisando = false;
