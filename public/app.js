@@ -504,7 +504,9 @@ function chipEstado(mov) {
 function filaMovimiento(m, editar) {
   const contenido = [
     h('span', { class: 'cuerpo' },
-      h('strong', null, m.descripcion, m.enSerie && h('span', { class: 'tenue', title: 'Se repite cada mes' }, ' ↻')),
+      h('strong', null, m.descripcion,
+        m.enSerie && h('span', { class: 'tenue', title: 'Se repite cada mes' }, ' ↻'),
+        m.desdeCorreo && h('span', { class: 'tenue', title: 'Registrado desde tu correo de Gmail' }, ' 📧')),
       h('small', null, `${fechaCorta(m.fecha)} · ${m.categoria} `),
       chipEstado(m),
     ),
@@ -574,8 +576,9 @@ const cargarMes = () => api(`/libros/${estado.libroId}/mes?mes=${estado.mes}&has
 function calendario(movimientos) {
   const porDia = new Map();
   for (const m of movimientos) {
-    const dia = porDia.get(m.fecha) ?? { pendiente: false, otros: false };
+    const dia = porDia.get(m.fecha) ?? { pendiente: false, otros: false, correo: false };
     if (m.tipo === 'gasto' && !m.pagado) dia.pendiente = true;
+    else if (m.desdeCorreo) dia.correo = true;
     else dia.otros = true;
     porDia.set(m.fecha, dia);
   }
@@ -594,6 +597,7 @@ function calendario(movimientos) {
       fechaTexto(fecha, { weekday: 'long', day: 'numeric', month: 'long' }),
       info?.pendiente && 'con pagos pendientes',
       info?.otros && 'con movimientos',
+      info?.correo && 'con movimientos de tu correo',
     ].filter(Boolean).join(', ');
     celdas.push(
       h('button', {
@@ -610,6 +614,7 @@ function calendario(movimientos) {
         h('span', { class: 'puntos' },
           info?.pendiente && h('span', { class: 'punto rojo' }),
           info?.otros && h('span', { class: 'punto' }),
+          info?.correo && h('span', { class: 'punto correo' }),
         ),
       ),
     );
@@ -620,6 +625,7 @@ function calendario(movimientos) {
     h('div', { class: 'leyenda' },
       h('span', null, h('span', { class: 'punto rojo' }), 'Pago pendiente'),
       h('span', null, h('span', { class: 'punto' }), 'Pagado o ingreso'),
+      movimientos.some((m) => m.desdeCorreo) && h('span', null, h('span', { class: 'punto correo' }), 'Desde tu correo'),
     ),
   ];
 }
@@ -1182,14 +1188,14 @@ function pintarCuenta() {
   const fechaDe = (f) => new Date(f).toLocaleDateString('es', { timeZone: 'UTC' });
   const e = g?.escaneo;
   const textoEscaneo = e && (e.estado === 'en curso'
-    ? `⏳ Revisando tus correos del ${fechaDe(e.desde)} al ${fechaDe(e.hasta)}: ${e.revisados} revisados, ${e.registrados} gastos registrados hasta ahora.`
+    ? `⏳ Revisando tus correos del ${fechaDe(e.desde)} al ${fechaDe(e.hasta)}: ${e.revisados} revisados, ${e.registrados} movimientos registrados hasta ahora.`
     : e.estado === 'error'
       ? `La última revisión de correos anteriores falló: ${e.error}`
-      : `Última revisión de correos anteriores (del ${fechaDe(e.desde)} al ${fechaDe(e.hasta)}): ${e.revisados} correos revisados, ${e.registrados} gastos registrados${e.duplicados ? `, ${e.duplicados} ya estaban anotados` : ''}.${e.quedan ? ' Quedan más correos en ese periodo: vuelve a escanear para seguir.' : ''}`);
+      : `Última revisión de correos anteriores (del ${fechaDe(e.desde)} al ${fechaDe(e.hasta)}): ${e.revisados} correos revisados, ${e.registrados} movimientos registrados${e.duplicados ? `, ${e.duplicados} ya estaban anotados` : ''}.${e.quedan ? ' Quedan más correos en ese periodo: vuelve a escanear para seguir.' : ''}`);
 
   const seccionEscaneo = g && h('div', { class: 'escaneo' },
     h('h4', null, 'Correos anteriores'),
-    h('p', { class: 'tenue' }, 'Revisa los avisos de compras y pagos que ya tienes en tu Gmail y regístralos como gastos. Los que ya anotaste (mismo monto y fecha) no se duplican. También puedes pedírselo al Asistente IA.'),
+    h('p', { class: 'tenue' }, 'Revisa los avisos de compras, pagos e ingresos que ya tienes en tu Gmail y regístralos en tu libro y calendario. Los que ya anotaste (mismo monto y fecha) no se duplican. También puedes pedírselo al Asistente IA.'),
     textoEscaneo && h('p', { class: e.estado === 'error' ? 'error' : null }, textoEscaneo),
     e?.estado === 'en curso'
       ? h('button', { type: 'button', onclick: recargarCuenta }, 'Actualizar progreso')
@@ -1210,12 +1216,12 @@ function pintarCuenta() {
     g
       ? [
           h('p', null, g.activo
-            ? 'El bot revisa tu correo cada pocos minutos y registra solo en tu libro los gastos que te avisan tus bancos, Yape, Plin, tiendas y apps (compras, consumos, pagos y transferencias).'
+            ? 'El bot revisa tu correo cada pocos minutos y registra solo en tu libro y en el calendario los gastos e ingresos que te avisan tus bancos, Yape, Plin, tiendas y apps (compras, pagos, transferencias, yapeos recibidos, sueldo). Los verás marcados con 📧.'
             : 'La lectura de tu correo está en pausa: no se registra nada nuevo.'),
           g.error && h('p', { class: 'error' }, g.error),
           h('p', { class: 'tenue' }, `Última revisión: ${cuando(g.ultimaRevision)} · Registrados desde el correo: ${g.registrados}. Solo se leen correos recibidos desde el ${new Date(g.desde).toLocaleDateString('es')}.`),
           u.whatsapp
-            ? h('p', { class: 'tenue' }, 'Cada gasto que se registre te llegará también por WhatsApp; si alguno no es correcto, responde «deshacer».')
+            ? h('p', { class: 'tenue' }, 'Cada movimiento que se registre te llegará también por WhatsApp; si alguno no es correcto, responde «deshacer».')
             : h('p', { class: 'tenue' }, 'Añade tu WhatsApp arriba para recibir un aviso cada vez que se registre un gasto.'),
           h('div', { class: 'acciones' },
             g.activo && h('button', { type: 'button', class: 'primario', onclick: revisar }, 'Revisar ahora'),

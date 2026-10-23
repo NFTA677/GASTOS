@@ -237,6 +237,8 @@ const movPublico = (m) => ({
   pagado: m.pagado,
   fechaPago: fechaTexto(m.fechaPago),
   enSerie: Boolean(m.serie),
+  // Registrado solo a partir de un correo de Gmail.
+  desdeCorreo: Boolean(m.correoId),
 });
 
 function leerMovimiento(cuerpo, parcial = false) {

@@ -272,6 +272,7 @@ button.tira:hover { background: var(--realce); border-color: var(--superficie); 
 .puntos { display: flex; gap: 3px; height: 7px; }
 .punto { width: 7px; height: 7px; border-radius: 50%; background: var(--linea-fuerte); }
 .punto.rojo { background: var(--rojo); }
+.punto.correo { background: #2f7de1; }
 .dia.elegido .punto:not(.rojo) { background: var(--superficie); }
 .leyenda { display: flex; flex-wrap: wrap; justify-content: center; gap: .35rem 1.1rem; margin-top: .8rem; font-size: .8rem; color: var(--tenue); }
 .leyenda .punto, .leyenda i { display: inline-block; margin-right: .35rem; vertical-align: 0; }

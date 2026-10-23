@@ -149,7 +149,7 @@ rutasGoogle.post('/gmail/revisar', requiereSesion, async (req, res) => {
   res.json({ nuevos, usuario: await publico(await Usuario.findById(usuario._id)) });
 });
 
-// Revisa los correos de los últimos meses (1, 3, 6 o 12) y registra los gastos que encuentre.
+// Revisa los correos de los últimos meses (1, 3, 6 o 12) y registra los gastos e ingresos que encuentre.
 rutasGoogle.post('/gmail/escanear', requiereSesion, async (req, res) => {
   const usuario = await Usuario.findById(req.usuario.id);
   if (!usuario.gmail?.token) throw new ErrorHttp(400, 'Primero vincula tu Gmail');
@@ -202,7 +202,7 @@ async function accesoGmail(usuario) {
 }
 
 // Palabras de avisos de compra y pago; los demás correos ni se abren.
-const FILTRO = '{category:purchases compra compraste consumo consumiste cargo pago pagaste yapeaste plin transferencia transferiste boleta factura recibo comprobante voucher pedido orden viaje suscripcion purchase receipt payment order invoice}';
+const FILTRO = '{category:purchases compra compraste consumo consumiste cargo pago pagaste yapeaste plin transferencia transferiste boleta factura recibo comprobante voucher pedido orden viaje suscripcion purchase receipt payment order invoice recibiste yapearon plinearon abono depósito deposito sueldo haberes remuneración devolución reembolso}';
 
 const base64url = (datos) => Buffer.from(datos.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
 
@@ -254,7 +254,7 @@ function gastoSinIa(correo) {
   const simbolo = importe[1].toUpperCase();
   const moneda = simbolo.startsWith('S') || simbolo === 'PEN' ? 'PEN' : simbolo === '€' || simbolo === 'EUR' ? 'EUR' : 'USD';
   const quien = correo.remitente.replace(/<.*>/, '').replace(/"/g, '').trim();
-  return { esGasto: true, monto: Number(numero), moneda, descripcion: `${quien ? `${quien}: ` : ''}${correo.asunto}`, categoria: 'Otros', fecha: correo.fecha };
+  return { tipo: 'gasto', monto: Number(numero), moneda, descripcion: `${quien ? `${quien}: ` : ''}${correo.asunto}`, categoria: 'Otros', fecha: correo.fecha };
 }
 
 const dias = (a, b) => Math.abs(new Date(`${a}T00:00:00Z`) - new Date(`${b}T00:00:00Z`)) / 86400000;
@@ -262,16 +262,18 @@ const dias = (a, b) => Math.abs(new Date(`${a}T00:00:00Z`) - new Date(`${b}T00:0
 // Convierte lo que dijo la IA (o el filtro sin IA) en datos para registrar, o null si no es un gasto.
 async function interpretar(correo, monedaLibro, titular) {
   const gasto = (await leerGastoDeCorreo(correo, titular)) ?? gastoSinIa(correo);
-  if (!gasto?.esGasto) return null;
+  // «esGasto» es el formato anterior de la respuesta; se sigue aceptando.
+  const tipo = gasto?.tipo === 'ingreso' ? 'ingreso' : gasto?.tipo === 'gasto' || gasto?.esGasto === true ? 'gasto' : null;
+  if (!tipo) return null;
   const monto = Number(gasto.monto);
   if (!Number.isFinite(monto) || monto <= 0) return null;
   const moneda = typeof gasto.moneda === 'string' && /^[A-Za-z]{3}$/.test(gasto.moneda) ? gasto.moneda.toUpperCase() : monedaLibro;
-  let descripcion = typeof gasto.descripcion === 'string' && gasto.descripcion.trim() ? gasto.descripcion.trim() : correo.asunto || 'Gasto por correo';
+  let descripcion = typeof gasto.descripcion === 'string' && gasto.descripcion.trim() ? gasto.descripcion.trim() : correo.asunto || (tipo === 'gasto' ? 'Gasto por correo' : 'Ingreso por correo');
   // El libro guarda una sola moneda: si el cobro fue en otra, se avisa en la descripción.
   if (moneda !== monedaLibro) descripcion = `[${moneda}] ${descripcion}`;
   // La fecha de la IA solo se acepta si cuadra con la del correo.
   const fecha = typeof gasto.fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(gasto.fecha) && gasto.fecha <= correo.fecha && dias(gasto.fecha, correo.fecha) <= 3 ? gasto.fecha : correo.fecha;
-  return { tipo: 'gasto', monto, descripcion: descripcion.slice(0, 120), categoria: typeof gasto.categoria === 'string' ? gasto.categoria : 'Otros', fecha, pagado: true };
+  return { tipo, monto, descripcion: descripcion.slice(0, 120), categoria: typeof gasto.categoria === 'string' ? gasto.categoria : 'Otros', fecha, pagado: true };
 }
 
 const enCurso = new Set();
@@ -298,19 +300,19 @@ async function buscarCorreos(autorizacion, q, max) {
   return ids.slice(0, max);
 }
 
-// Un gasto igual (mismo monto, un día arriba o abajo) ya anotado, por ejemplo a mano: no se duplica.
+// Un movimiento igual (mismo tipo y monto, un día arriba o abajo) ya anotado, por ejemplo a mano: no se duplica.
 async function yaRegistrado(libro, datos) {
   const fecha = new Date(`${datos.fecha}T00:00:00Z`).getTime();
   return Movimiento.exists({
     libro: libro._id,
-    tipo: 'gasto',
+    tipo: datos.tipo,
     monto: Math.round(datos.monto * 100) / 100,
     fecha: { $gte: new Date(fecha - DIA), $lte: new Date(fecha + DIA) },
   });
 }
 
 /**
- * Revisa los correos que cumplen «q» y registra los gastos, los más antiguos primero.
+ * Revisa los correos que cumplen «q» y registra los gastos e ingresos, los más antiguos primero.
  * Va anotando en «resultado» { revisados, registrados, duplicados, quedan }: así se sabe lo hecho aunque falle a mitad.
  */
 async function procesarCorreos(usuario, libro, autorizacion, q, resultado, { maxCorreos, maxBuscar, alRegistrar, alAvanzar }) {
@@ -358,13 +360,13 @@ function motivoDeError(err) {
 
 async function prepararLectura(usuario) {
   const libro = libroActivo(usuario, await librosDe(usuario));
-  if (!libro) throw new Error('No tienes ningún libro donde registrar los gastos.');
+  if (!libro) throw new Error('No tienes ningún libro donde registrar los movimientos.');
   return { libro, autorizacion: { headers: { Authorization: `Bearer ${await accesoGmail(usuario)}` } } };
 }
 
 const BUSQUEDA = `-in:sent -in:drafts -in:chats ${FILTRO}`;
 
-/** Lee los correos nuevos de una persona y registra los gastos. Devuelve cuántos registró. */
+/** Lee los correos nuevos de una persona y registra gastos e ingresos. Devuelve cuántos registró. */
 export async function revisarUsuario(usuario) {
   if (enCurso.has(usuario.id) || !usuario.gmail?.token || !googleDisponible()) return 0;
   enCurso.add(usuario.id);
@@ -376,7 +378,7 @@ export async function revisarUsuario(usuario) {
     await procesarCorreos(usuario, libro, autorizacion, `after:${desde} ${BUSQUEDA}`, resultado, {
       maxCorreos: MAX_CORREOS,
       maxBuscar: 100,
-      alRegistrar: (confirmacion, correo) => avisarPorWhatsapp(usuario, `📧 *Desde tu correo* (${correo.asunto.slice(0, 80)})\n${confirmacion}`),
+      alRegistrar: (confirmacion, correo) => avisarPorWhatsapp(usuario, `📧 *Desde tu correo* (${correo.asunto.slice(0, 80)})\n${confirmacion}\nYa está en tu calendario de la app.`),
     });
     await Usuario.updateOne({ _id: usuario._id }, { $set: { 'gmail.ultimaRevision': new Date() }, $unset: { 'gmail.error': 1 }, $inc: { 'gmail.registrados': resultado.registrados } });
   } catch (err) {
@@ -423,7 +425,7 @@ export async function iniciarEscaneo(usuario, desdeTexto, hastaTexto) {
       Object.assign(estado, { estado: 'terminado', fin: new Date() });
       avisarPorWhatsapp(usuario, [
         `📧 *Revisión de tu correo terminada* (del ${fechaCorta(desde)} al ${fechaCorta(hasta)})`,
-        `Revisé ${estado.revisados} correos y registré *${estado.registrados} gastos*${estado.duplicados ? `; ${estado.duplicados} ya estaban anotados` : ''}.`,
+        `Revisé ${estado.revisados} correos y registré *${estado.registrados} movimientos*${estado.duplicados ? `; ${estado.duplicados} ya estaban anotados` : ''}. Ya están en tu calendario de la app.`,
         ...(estado.quedan ? ['Hay más correos en ese periodo: pídeme revisarlo otra vez para seguir.'] : []),
         'Pregúntame por cualquier mes, por ejemplo: «ia ¿cuánto gasté en septiembre?».',
       ].join('\n'));

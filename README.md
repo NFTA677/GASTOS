@@ -354,7 +354,7 @@ El **ID de cuenta** es el código que aparece en la barra de direcciones tras `d
 Con Google configurado aparecen dos cosas:
 
 - **«Continuar con Google»** en la pantalla de acceso: entra o crea la cuenta solo con nombre y correo de Google.
-- **«Vincular con Google»** en *Mi cuenta*: da permiso de solo lectura sobre Gmail. Cada `GMAIL_MINUTOS` (10 por defecto) el servidor busca correos nuevos de compras, consumos, pagos, Yape/Plin, transferencias, boletas y recibos, y registra cada gasto como **pagado** en el libro activo del bot. Si la persona tiene WhatsApp, le llega un aviso y puede responder «deshacer».
+- **«Vincular con Google»** en *Mi cuenta*: da permiso de solo lectura sobre Gmail. Cada `GMAIL_MINUTOS` (10 por defecto) el servidor busca correos nuevos de compras, consumos, pagos, Yape/Plin, transferencias, boletas y recibos, y registra cada gasto o ingreso (yapeos y transferencias recibidas, depósitos, sueldo, devoluciones) en el libro activo del bot, con la fecha del correo, así que aparece en el calendario marcado con 📧. No cuenta las transferencias entre cuentas propias ni los pagos de la tarjeta de crédito. Si la persona tiene WhatsApp, le llega un aviso y puede responder «deshacer».
 
 Cómo decide si un correo es un gasto:
 
