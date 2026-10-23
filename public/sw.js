@@ -1,6 +1,8 @@
 // Cambia la versión al publicar cambios para que se descarte la caché anterior.
-const CACHE = 'nfta-gastos-v14';
+const CACHE = 'nfta-gastos-v15';
 const ARCHIVOS = ['/', '/styles.css', '/app.js', '/tema.js', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
+// Si la red tarda más que esto (servidor dormido), se enseña la copia guardada.
+const ESPERA_RED_MS = 4000;
 
 self.addEventListener('install', (ev) => {
   ev.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ARCHIVOS)).then(() => self.skipWaiting()));
@@ -19,17 +21,20 @@ self.addEventListener('fetch', (ev) => {
   // Los datos (/api) siempre van a la red: nunca se guardan gastos en la caché.
   if (ev.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
 
-  // Interfaz: se responde al instante desde la caché y se actualiza en segundo plano.
+  // La página se guarda siempre como «/», aunque llegue con parámetros (?google=…).
+  const clave = ev.request.mode === 'navigate' ? '/' : ev.request;
+
+  // Interfaz: primero la red, para ver siempre la última versión; sin red o si tarda, la copia guardada.
   ev.respondWith(
     caches.open(CACHE).then(async (cache) => {
-      const guardado = await cache.match(ev.request);
-      const deRed = fetch(ev.request)
-        .then((res) => {
-          if (res.ok) cache.put(ev.request, res.clone());
-          return res;
-        })
-        .catch(() => guardado);
-      return guardado ?? deRed;
+      const deRed = fetch(ev.request).then((res) => {
+        if (res.ok) cache.put(clave, res.clone());
+        return res;
+      });
+      const guardado = await cache.match(clave);
+      if (!guardado) return deRed;
+      const tarde = new Promise((resolver) => setTimeout(() => resolver(guardado), ESPERA_RED_MS));
+      return Promise.race([deRed.catch(() => guardado), tarde]);
     }),
   );
 });
