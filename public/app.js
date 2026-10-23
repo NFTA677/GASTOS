@@ -1217,6 +1217,125 @@ function pintarCuenta() {
   ];
 }
 
+// ---------- vista: asistente de IA ----------
+
+// Conversación de esta sesión: { de: 'yo' | 'ia', texto, pdfs?, error? }.
+// La IA recuerda los últimos turnos en el servidor y los comparte con el bot de WhatsApp.
+const chat = [];
+let esperandoIa = false;
+
+const SUGERENCIAS = [
+  '¿Cuánto gasté este mes?',
+  'Analiza mis gastos del correo',
+  '¿En qué categoría gasto más?',
+  '¿Qué pagos tengo pendientes?',
+  'Mándame el resumen del mes por WhatsApp',
+  'Dame el PDF de este mes',
+];
+
+// Pinta *negrita* (el formato de WhatsApp que usa la IA) sin interpretar HTML.
+const conNegritas = (texto) => texto.split(/(\*[^*\n]+\*)/).map((trozo) => (/^\*[^*\n]+\*$/.test(trozo) ? h('b', null, trozo.slice(1, -1)) : trozo));
+
+function burbuja(mensaje, puedeWhatsapp) {
+  if (mensaje.de === 'yo') return h('div', { class: 'burbuja yo' }, mensaje.texto);
+  if (mensaje.pensando) return h('div', { class: 'burbuja ia tenue' }, 'Pensando…');
+  const enviarWhatsapp = () => intentar(async () => {
+    await api('/ia/whatsapp', { method: 'POST', body: { texto: mensaje.texto } });
+    avisar('Enviado a tu WhatsApp');
+  });
+  return h('div', { class: `burbuja ia${mensaje.error ? ' con-error' : ''}` },
+    h('div', null, ...conNegritas(mensaje.texto)),
+    !mensaje.error && h('div', { class: 'burbuja-acciones' },
+      ...(mensaje.pdfs ?? []).map((pdf) => h('button', {
+        type: 'button',
+        class: 'mini',
+        onclick: () => {
+          const bytes = Uint8Array.from(atob(pdf.datos), (c) => c.charCodeAt(0));
+          guardarArchivo(new Blob([bytes], { type: 'application/pdf' }), pdf.nombre);
+        },
+      }, `Descargar ${pdf.nombre}`)),
+      puedeWhatsapp && !mensaje.enviadoWhatsapp && h('button', { type: 'button', class: 'mini', onclick: enviarWhatsapp }, 'Enviar por WhatsApp'),
+    ),
+  );
+}
+
+function pintarAsistente(datos) {
+  if (!datos.disponible) {
+    return [
+      h('div', { class: 'periodo' }, h('h2', { class: 'izquierda' }, 'Asistente IA')),
+      h('section', { class: 'panel' },
+        h('p', null, 'La IA no está activada todavía.'),
+        h('p', { class: 'tenue' }, estado.usuario.esAdmin
+          ? 'Actívala en Admin → IA: elige Claude o NVIDIA, guarda la clave y marca «Activar».'
+          : 'Pide al administrador que la active.'),
+      ),
+    ];
+  }
+
+  const pintarLista = () => {
+    const lista = $('#chat-lista');
+    if (!lista) return;
+    lista.replaceChildren(...(chat.length
+      ? chat.map((m) => burbuja(m, datos.whatsapp))
+      : [h('p', { class: 'vacio' }, 'Pregúntame por tus gastos, pídeme un análisis de lo que te llega por correo o que te mande un informe por WhatsApp.')]));
+    lista.scrollTop = lista.scrollHeight;
+  };
+
+  const enviar = async (texto) => {
+    texto = texto.trim();
+    if (!texto || esperandoIa) return;
+    esperandoIa = true;
+    chat.push({ de: 'yo', texto });
+    const pensando = { de: 'ia', pensando: true };
+    chat.push(pensando);
+    pintarLista();
+    try {
+      const r = await api('/ia/chat', { method: 'POST', body: { mensaje: texto, libroId: estado.libroId } });
+      Object.assign(pensando, { pensando: false, texto: r.texto || 'Hecho.', pdfs: r.pdfs, enviadoWhatsapp: r.enviadoWhatsapp });
+      // Si registró o borró algo, los datos de las otras vistas ya no valen.
+      datosRecordados.clear();
+    } catch (err) {
+      Object.assign(pensando, { pensando: false, texto: err.message, error: true });
+    } finally {
+      esperandoIa = false;
+      pintarLista();
+    }
+  };
+
+  const alEnviar = (ev) => {
+    ev.preventDefault();
+    const campo = ev.target.mensaje;
+    const texto = campo.value;
+    campo.value = '';
+    enviar(texto);
+    campo.focus();
+  };
+
+  // La lista se pinta cuando ya está en la página.
+  queueMicrotask(pintarLista);
+
+  return [
+    h('div', { class: 'periodo' }, h('h2', { class: 'izquierda' }, 'Asistente IA')),
+    h('section', { class: 'panel chat-panel' },
+      h('div', { id: 'chat-lista', class: 'chat-lista', 'aria-live': 'polite' }),
+      h('div', { class: 'sugerencias' },
+        ...SUGERENCIAS
+          .filter((s) => datos.whatsapp || !s.includes('WhatsApp'))
+          .map((s) => h('button', { type: 'button', class: 'mini', onclick: () => enviar(s) }, s)),
+      ),
+      h('form', { class: 'chat-form', onsubmit: alEnviar },
+        h('input', { name: 'mensaje', maxLength: 1000, autocomplete: 'off', placeholder: 'Escribe tu pregunta…', 'aria-label': 'Mensaje para el asistente' }),
+        h('button', { class: 'primario' }, 'Enviar'),
+      ),
+    ),
+    h('p', { class: 'tenue' },
+      datos.whatsapp
+        ? 'Esta conversación se comparte con el bot de WhatsApp: puedes seguirla allí escribiendo «ia» y tu pregunta.'
+        : 'Añade tu WhatsApp en «Mi cuenta» para recibir las respuestas y los informes allí.',
+      datos.gmail ? '' : ' Vincula tu Gmail en «Mi cuenta» para que analice también los gastos que te llegan por correo.'),
+  ];
+}
+
 // ---------- vista: administrador ----------
 
 function tamano(bytes) {
@@ -1535,6 +1654,7 @@ const VISTAS = {
   informe: { cargar: async () => null, pintar: pintarInforme },
   compartir: { cargar: cargarCompartir, pintar: pintarCompartir },
   cuenta: { cargar: async () => null, pintar: pintarCuenta },
+  asistente: { cargar: () => api('/ia/estado'), pintar: pintarAsistente },
   admin: { cargar: cargarAdmin, pintar: pintarAdmin },
 };
 // Número de la última descarga de datos; una descarga más antigua que termine tarde se descarta.

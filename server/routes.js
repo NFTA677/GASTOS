@@ -4,7 +4,8 @@ import { Usuario, Libro, Movimiento } from './models.js';
 import { ErrorHttp, texto } from './errores.js';
 import rateLimit from 'express-rate-limit';
 import { generarInforme } from './informe.js';
-import { informePeriodo } from './bot.js';
+import { informePeriodo, contextoParaIa, ejecutarAcciones } from './bot.js';
+import { iaDisponible, preguntar } from './ia.js';
 import { whatsappConectado, enviarANumero } from './whatsapp.js';
 import { correoDisponible, enviarCorreo, metodoCorreo, sinFormatoWhatsapp } from './correo.js';
 import { esAdmin } from './auth.js';
@@ -489,4 +490,61 @@ libro.get('/resumen', async (req, res) => {
     totales,
     categorias: porCategoria.map((c) => ({ tipo: c._id.tipo, categoria: c._id.categoria, total: redondear(c.total) })),
   });
+});
+
+// ---------- asistente de IA en la app ----------
+
+// Puede recibir por WhatsApp si el bot está conectado y la cuenta tiene número.
+const recibeWhatsapp = (usuario) => whatsappConectado() && Boolean(usuario.whatsapp);
+
+rutasApi.get('/ia/estado', async (req, res) => {
+  const usuario = await Usuario.findById(req.usuario.id);
+  const ia = await iaDisponible();
+  res.json({ disponible: ia.disponible, whatsapp: recibeWhatsapp(usuario), gmail: Boolean(usuario.gmail?.token) });
+});
+
+// Una pregunta al asistente. Comparte la memoria de la conversación con el bot de WhatsApp.
+rutasApi.post('/ia/chat', async (req, res) => {
+  const mensaje = texto(req.body.mensaje, 'el mensaje', 1000);
+  const libroId = mongoose.isValidObjectId(req.body.libroId) ? req.body.libroId : undefined;
+  const usuario = await Usuario.findById(req.usuario.id);
+  if (!(await iaDisponible()).disponible) throw new ErrorHttp(503, 'La IA no está activada. El administrador puede activarla en Admin → IA.');
+
+  const puedeRecibirWhatsapp = recibeWhatsapp(usuario);
+  const contexto = await contextoParaIa(usuario, { libroId, canal: 'web', puedeRecibirWhatsapp });
+  if (!contexto) throw new ErrorHttp(400, 'Primero crea un libro.');
+  const respuesta = await preguntar(usuario, contexto, mensaje);
+  if (!respuesta) throw new ErrorHttp(503, 'La IA no está disponible ahora mismo.');
+
+  const { textos, pdfs } = await ejecutarAcciones(usuario, respuesta.acciones, { libroId });
+  let contestacion = [respuesta.texto, ...textos].filter(Boolean).join('\n\n');
+
+  // Si pidió recibirlo por WhatsApp, se envía la respuesta y los PDF a su propio número.
+  let enviadoWhatsapp = false;
+  if (puedeRecibirWhatsapp && respuesta.acciones.some((a) => a?.tipo === 'whatsapp')) {
+    try {
+      if (contestacion) await enviarANumero(usuario.whatsapp, { texto: contestacion });
+      for (const informe of pdfs) await enviarANumero(usuario.whatsapp, informe);
+      enviadoWhatsapp = true;
+      contestacion += '\n\n📲 Enviado a tu WhatsApp.';
+    } catch (err) {
+      contestacion += `\n\nNo se pudo enviar por WhatsApp: ${err.message}`;
+    }
+  }
+
+  res.json({
+    texto: contestacion,
+    enviadoWhatsapp,
+    pdfs: pdfs.map((p) => ({ nombre: p.pdf.nombre, datos: p.pdf.buffer.toString('base64') })),
+  });
+});
+
+// Reenvía a tu propio WhatsApp una respuesta del asistente.
+rutasApi.post('/ia/whatsapp', async (req, res) => {
+  const mensaje = texto(req.body.texto, 'el texto', 4000);
+  const usuario = await Usuario.findById(req.usuario.id);
+  if (!usuario.whatsapp) throw new ErrorHttp(400, 'Añade tu número de WhatsApp en «Mi cuenta».');
+  if (!whatsappConectado()) throw new ErrorHttp(503, 'El bot de WhatsApp no está conectado ahora mismo.');
+  await enviarANumero(usuario.whatsapp, { texto: `🤖 *Asistente N.F.T.A*\n\n${mensaje}` });
+  res.status(204).end();
 });

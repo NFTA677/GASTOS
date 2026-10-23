@@ -47,6 +47,10 @@ Aplicación web para llevar las finanzas personales o compartidas: gastos, ingre
 - **Continuar con Google:** en la pantalla de acceso, si Google está configurado. Entra en la cuenta con ese correo o crea una nueva (sin contraseña; se puede poner una después con «¿Olvidaste tu contraseña?»).
 - **Mi cuenta:** en el menú. Permite cambiar el nombre y el número de WhatsApp, y vincular Gmail para que los gastos que llegan por correo se registren solos (ver [Google y gastos desde Gmail](#google-y-gastos-desde-gmail)).
 
+### Asistente IA
+
+En el menú, **Asistente IA** abre un chat (requiere la IA activada en Admin → IA). Se le puede preguntar por los gastos, pedir un análisis de los gastos que llegaron por Gmail (por comercio, categoría, suscripciones y cargos repetidos), registrar movimientos, pedir un PDF o pedir que la respuesta llegue por WhatsApp («mándamelo por WhatsApp»). Cada respuesta tiene además un botón «Enviar por WhatsApp». La conversación se comparte con el bot: se puede seguir en WhatsApp escribiendo «ia» y la pregunta. Trabaja sobre el libro elegido en la app.
+
 ### Menú
 
 El botón de las tres rayas abre el menú lateral con las secciones (Mes, Año, Informe PDF, Compartir, Mi cuenta y, para el administrador, Admin), el libro activo, su moneda, el modo claro u oscuro, «Instalar app» y «Cerrar sesión».

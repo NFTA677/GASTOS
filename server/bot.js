@@ -406,19 +406,33 @@ export async function estadoDeCuenta(usuario) {
 
 // ---------- IA: contexto y ejecución de lo que pide ----------
 
-// Contexto compacto para la IA: totales y movimientos del libro activo.
-export async function contextoParaIa(usuario) {
+// Libro sobre el que trabaja la IA: el elegido en la app (si se indica y tiene acceso) o el activo del bot.
+async function libroParaIa(usuario, libroId) {
   const libros = await librosDe(usuario);
-  if (libros.length === 0) return null;
-  const libro = libroActivo(usuario, libros);
+  return libros.find((l) => libroId && String(l._id) === String(libroId)) ?? libroActivo(usuario, libros);
+}
+
+// Contexto compacto para la IA: totales y movimientos del libro activo, más los gastos llegados por correo.
+// «canal» es "whatsapp" o "web"; desde la web la IA puede pedir que su respuesta se envíe por WhatsApp.
+export async function contextoParaIa(usuario, { libroId, canal = 'whatsapp', puedeRecibirWhatsapp = false } = {}) {
+  const libro = await libroParaIa(usuario, libroId);
+  if (!libro) return null;
   const d = await datosDe(libro);
-  const corto = (m) => ({ fecha: aTexto(m.fecha), tipo: m.tipo, descripcion: m.descripcion, categoria: m.categoria, monto: m.monto, pagado: m.pagado });
+  const corto = (m) => ({ fecha: aTexto(m.fecha), tipo: m.tipo, descripcion: m.descripcion, categoria: m.categoria, monto: m.monto, pagado: m.pagado, ...(m.correoId && { desdeCorreo: true }) });
+  const delCorreo = usuario.gmail?.token
+    ? await Movimiento.find({ libro: libro._id, correoId: { $exists: true }, fecha: { $gte: aFecha(sumarDias(d.hoy, -90)) } }).sort('-fecha').limit(150).lean()
+    : [];
   return {
+    canal,
+    ...(canal === 'web' && { puedeRecibirWhatsapp }),
     libro: libro.nombre,
     moneda: libro.moneda,
     puedeRegistrar: puedeEscribir(usuario, libro),
     hoy: d.hoy,
     saludoPorLaHora: saludoSegunHora(),
+    correo: usuario.gmail?.token
+      ? { vinculado: true, cuenta: usuario.gmail.email, activo: usuario.gmail.activo, desde: aTexto(usuario.gmail.desde ?? new Date()), gastosUltimos90Dias: delCorreo.map(corto) }
+      : { vinculado: false },
     mesActual: { mes: d.mes, totales: d.totalMes, movimientos: d.delMes.slice(0, 200).map(corto) },
     mesSiguiente: { mes: d.proximo, totales: d.totalProximo, movimientos: d.delProximo.slice(0, 100).map(corto) },
     pendientesVencidosYProximos30Dias: d.pendientes.map(corto),
@@ -430,12 +444,12 @@ export async function contextoParaIa(usuario) {
  * Ejecuta las acciones que propuso la IA, validándolas una a una.
  * Devuelve los textos de confirmación y los PDF que hay que enviar.
  */
-export async function ejecutarAcciones(usuario, acciones) {
+export async function ejecutarAcciones(usuario, acciones, { libroId } = {}) {
   const textos = [];
   const pdfs = [];
   if (!Array.isArray(acciones) || acciones.length === 0) return { textos, pdfs };
 
-  const libro = libroActivo(usuario, await librosDe(usuario));
+  const libro = await libroParaIa(usuario, libroId);
   if (!libro) return { textos, pdfs };
 
   // Como mucho unas pocas acciones por mensaje: un modelo confundido no debe llenar el libro.

@@ -439,3 +439,18 @@ dialog h2 { margin-bottom: 1rem; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* Asistente IA */
+.chat-panel { display: flex; flex-direction: column; gap: .75rem; }
+.chat-lista { display: flex; flex-direction: column; gap: .6rem; min-height: 240px; max-height: calc(100dvh - 330px); overflow-y: auto; padding: .25rem; }
+.burbuja { max-width: 85%; padding: .6rem .85rem; border-radius: var(--radio); white-space: pre-wrap; line-height: 1.45; overflow-wrap: anywhere; }
+.burbuja.yo { align-self: flex-end; background: var(--tinta); color: var(--superficie); border-bottom-right-radius: 4px; }
+.burbuja.ia { align-self: flex-start; background: var(--realce); border-bottom-left-radius: 4px; }
+.burbuja.con-error { border: 1px solid var(--rojo); color: var(--rojo); }
+.burbuja-acciones { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; white-space: normal; }
+.burbuja-acciones:empty { display: none; }
+.sugerencias { display: flex; gap: .4rem; overflow-x: auto; padding-bottom: .2rem; }
+.sugerencias button { flex: none; white-space: nowrap; }
+.chat-form { display: flex; gap: .5rem; }
+.chat-form input { flex: 1; min-width: 0; }
+.chat-form button { flex: none; }
