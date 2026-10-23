@@ -159,9 +159,12 @@ async function pedirAClaude(ajustes, { system, messages }) {
 }
 
 // La API de NVIDIA sigue el formato de «chat completions»: las instrucciones van como primer mensaje.
-async function pedirANvidia(ajustes, { system, messages }, intento = 1, permitirSinRazonar = true) {
+// «maxTokens» y «esperaMs» permiten hacer pruebas cortas al buscar un modelo que responda.
+async function pedirANvidia(ajustes, { system, messages, maxTokens = 4096, esperaMs = 60_000 }, intento = 1, permitirSinRazonar = true) {
   // Los Nemotron «piensan» antes de responder y pueden tardar más de un minuto: aquí no hace falta.
   const sinRazonar = permitirSinRazonar && /nemotron/i.test(ajustes.modelo);
+  const repetir = (otroIntento, conSinRazonar = permitirSinRazonar) =>
+    pedirANvidia(ajustes, { system, messages, maxTokens, esperaMs }, otroIntento, conSinRazonar);
   let res;
   try {
     res = await fetch(`${NVIDIA_URL}/chat/completions`, {
@@ -169,64 +172,71 @@ async function pedirANvidia(ajustes, { system, messages }, intento = 1, permitir
       headers: { Authorization: `Bearer ${ajustes.clave}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: ajustes.modelo,
-        max_tokens: 4096,
+        max_tokens: maxTokens,
         temperature: 0.2,
         messages: [...(system ? [{ role: 'system', content: `${sinRazonar ? '/no_think\n' : ''}${system}` }] : []), ...messages],
         ...(sinRazonar && { chat_template_kwargs: { enable_thinking: false } }),
       }),
-      signal: AbortSignal.timeout(90_000),
+      signal: AbortSignal.timeout(esperaMs),
     });
   } catch (err) {
-    if (err.name === 'TimeoutError') throw new ErrorNvidia(0, 'tiempo agotado (el modelo tardó más de 90 segundos; prueba uno más rápido en Admin → IA)');
-    if (intento === 1) return pedirANvidia(ajustes, { system, messages }, 2, permitirSinRazonar);
+    if (err.name === 'TimeoutError') throw new ErrorNvidia(0, `tiempo agotado (${ajustes.modelo} tardó más de ${Math.round(esperaMs / 1000)} segundos)`);
+    if (intento === 1) return repetir(2);
     throw new ErrorNvidia(0, err.message);
   }
   const cuerpo = await res.json().catch(() => null);
   // Si el modelo no admite la opción de no razonar, se repite la petición sin ella.
-  if (res.status === 400 && sinRazonar) return pedirANvidia(ajustes, { system, messages }, intento, false);
+  if (res.status === 400 && sinRazonar) return repetir(intento, false);
   // Saturación pasajera: un reintento tras una breve pausa.
   if ([429, 500, 502, 503, 504].includes(res.status) && intento === 1) {
     await new Promise((listo) => setTimeout(listo, 3000));
-    return pedirANvidia(ajustes, { system, messages }, 2, permitirSinRazonar);
+    return repetir(2);
   }
   if (!res.ok) throw new ErrorNvidia(res.status, cuerpo?.detail ?? cuerpo?.error?.message ?? cuerpo?.title ?? '');
   return { texto: cuerpo?.choices?.[0]?.message?.content ?? '' };
 }
 
-// Modelos rápidos de NVIDIA que se prueban, en este orden, si el elegido no está habilitado en la cuenta.
+// Modelos de NVIDIA que se prueban, en este orden, si el elegido no está habilitado o es demasiado lento.
+// Primero los que responden sin fase de razonamiento, que son los más rápidos.
 const RESPALDO_NVIDIA = [
-  'openai/gpt-oss-20b',
-  'nvidia/nemotron-nano-3-30b-a3b',
   'meta/llama-3.3-70b-instruct',
-  'openai/gpt-oss-120b',
-  'meta/llama-3.1-70b-instruct',
   'mistralai/mistral-small-24b-instruct',
+  'meta/llama-3.1-70b-instruct',
+  'nvidia/nemotron-nano-3-30b-a3b',
+  'openai/gpt-oss-20b',
+  'meta/llama-3.1-8b-instruct',
+  'openai/gpt-oss-120b',
   ...MODELOS_NVIDIA_BASE,
 ];
 
-// La lista de NVIDIA incluye modelos que la cuenta no puede usar (responden 404). Si pasa con el
-// elegido, se prueban otros y el primero que responda queda guardado como modelo de NVIDIA.
+const fallaPorModelo = (err) => err instanceof ErrorNvidia && (err.estado === 404 || (err.estado === 0 && err.message.startsWith('tiempo agotado')));
+
+// La lista de NVIDIA incluye modelos que la cuenta no puede usar (404) y otros muy lentos. Si pasa
+// con el elegido, se prueba cada alternativa con una pregunta mínima; la primera que contesta a
+// tiempo queda guardada como modelo de NVIDIA y responde la pregunta real.
 async function pedirANvidiaConRespaldo(ajustes, parametros) {
   try {
     return { ...(await pedirANvidia(ajustes, parametros)), modelo: ajustes.modelo };
   } catch (err) {
-    if (!(err instanceof ErrorNvidia && err.estado === 404)) throw err;
+    if (!fallaPorModelo(err)) throw err;
     const disponibles = await modelosNvidia(ajustes.clave);
-    const candidatos = [...new Set(RESPALDO_NVIDIA)].filter((m) => m !== ajustes.modelo && disponibles.includes(m)).slice(0, 5);
+    const candidatos = [...new Set(RESPALDO_NVIDIA)].filter((m) => m !== ajustes.modelo && disponibles.includes(m)).slice(0, 7);
+    const prueba = { messages: [{ role: 'user', content: 'Responde solo: ok' }], maxTokens: 16, esperaMs: 15_000 };
     for (const modelo of candidatos) {
       try {
-        const respuesta = await pedirANvidia({ ...ajustes, modelo }, parametros);
-        const actual = { ...(await guardadoIa()) };
-        actual.modeloNvidia = modelo;
-        await Ajuste.findByIdAndUpdate('ia', { valor: actual }, { upsert: true });
-        ajustesEnMemoria = { hasta: 0, valor: null };
-        console.log(`IA: el modelo ${ajustes.modelo} no está habilitado; se usa ${modelo}.`);
-        return { ...respuesta, modelo };
+        await pedirANvidia({ ...ajustes, modelo }, prueba, 2);
       } catch (otro) {
-        if (!(otro instanceof ErrorNvidia && otro.estado === 404)) throw otro;
+        if (fallaPorModelo(otro) || (otro instanceof ErrorNvidia && otro.estado >= 500)) continue;
+        throw otro;
       }
+      const actual = { ...(await guardadoIa()) };
+      actual.modeloNvidia = modelo;
+      await Ajuste.findByIdAndUpdate('ia', { valor: actual }, { upsert: true });
+      ajustesEnMemoria = { hasta: 0, valor: null };
+      console.log(`IA: ${ajustes.modelo} no responde (${err.message}); se usa ${modelo}.`);
+      return { ...(await pedirANvidia({ ...ajustes, modelo }, parametros)), modelo };
     }
-    throw err;
+    throw new ErrorNvidia(err.estado, `${err.message}. Tampoco respondió ningún otro modelo de tu cuenta: puede que NVIDIA esté saturado o que la clave no tenga créditos.`);
   }
 }
 
@@ -246,6 +256,7 @@ function paraWhatsapp(texto) {
 // Convierte los errores de los proveedores en un mensaje entendible para el administrador.
 export function explicarError(err) {
   if (err instanceof ErrorNvidia) {
+    if (err.message.includes('Tampoco respondió')) return `NVIDIA: ${err.message}`;
     if (err.estado === 401 || err.estado === 403) return 'La clave de NVIDIA no es válida o no tiene permiso.';
     if (err.estado === 404) return 'Ese modelo de NVIDIA no está disponible para tu cuenta. Elige otro de la lista.';
     if (err.estado === 402) return 'La cuenta de NVIDIA se quedó sin créditos.';
